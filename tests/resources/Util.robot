@@ -174,11 +174,10 @@ Run Secret VIC Machine Delete Command
 Run VIC Machine Delete Command
     ${rc}  ${output}=  Run Secret VIC Machine Delete Command  ${vch-name}
     Wait Until Keyword Succeeds  6x  5s  Check Delete Success  ${vch-name}
+    Run  rm -rf ${vch-name}
     Should Be Equal As Integers  ${rc}  0
     Should Contain  ${output}  Completed successfully
     [Return]  ${output}
-    Run  rm -f ${vch-name}/*
-    Run  rmdir ${vch-name}
 
 Cleanup Datastore On Test Server
     ${out}=  Run  govc datastore.ls
