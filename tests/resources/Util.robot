@@ -177,6 +177,8 @@ Run VIC Machine Delete Command
     Should Be Equal As Integers  ${rc}  0
     Should Contain  ${output}  Completed successfully
     [Return]  ${output}
+    Run  rm -f ${vch-name}/*
+    Run  rmdir ${vch-name}
 
 Cleanup Datastore On Test Server
     ${out}=  Run  govc datastore.ls
