@@ -100,6 +100,14 @@ func withRetry(op func() error) error {
 }
 
 func (c *client) isCompletePacket(p *dhcp.Packet) bool {
+	defer trace.End(trace.Begin(""))
+
+	log.Infof("The IP offer is: ", p.YourIP())
+	log.Infof("The server IP is: ", p.ServerIP())
+	log.Infof("The subnet mask is: ", p.SubnetMask())
+	log.Infof("The gateway is: ", p.Gateway())
+	log.Infof("The DNS is: ", p.DNS())
+
 	complete := !ip.IsUnspecifiedIP(p.YourIP()) &&
 		!ip.IsUnspecifiedIP(p.ServerIP())
 
@@ -208,6 +216,9 @@ func (c *client) Request() error {
 		dhcp4client.Connection(raw),
 		dhcp4client.Timeout(c.timeout),
 		dhcp4client.HardwareAddr(c.id.HardwareAddr))
+
+	log.Infof("The hardware address is: ", c.id.HardwareAddr)
+
 	if err != nil {
 		return err
 	}
