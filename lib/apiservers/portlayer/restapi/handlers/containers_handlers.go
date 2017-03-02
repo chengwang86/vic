@@ -60,6 +60,7 @@ func (handler *ContainersHandlersImpl) Configure(api *operations.PortLayerAPI, h
 	api.ContainersContainerSignalHandler = containers.ContainerSignalHandlerFunc(handler.ContainerSignalHandler)
 	api.ContainersGetContainerLogsHandler = containers.GetContainerLogsHandlerFunc(handler.GetContainerLogsHandler)
 	api.ContainersContainerWaitHandler = containers.ContainerWaitHandlerFunc(handler.ContainerWaitHandler)
+	api.ContainersContainerRenameHandler = containers.ContainerRenameHandlerFunc(handler.RenameContainerHandler)
 
 	handler.handlerCtx = handlerCtx
 }
@@ -405,6 +406,31 @@ func (handler *ContainersHandlersImpl) ContainerWaitHandler(params containers.Co
 			Message: fmt.Sprintf("ContainerWaitHandler(%s) Error: %s", params.ID, ctx.Err()),
 		})
 	}
+}
+
+func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.ContainerRenameParams) middleware.Responder {
+	defer trace.End(trace.Begin(params.ID))
+
+	// get the indicated container for rename
+	container := exec.Containers.Container(params.ID)
+	if container == nil {
+		return containers.NewContainerRemoveNotFound()
+	}
+
+	// NOTE: this should allowing batching of operations, as with Create, Start, Stop, et al
+	err := container.Rename(context.Background(), handler.handlerCtx.Session, params.Name)
+	if err != nil {
+		switch err := err.(type) {
+		case exec.NotFoundError:
+			return containers.NewContainerRemoveNotFound()
+		case exec.RemovePowerError:
+			return containers.NewContainerRemoveConflict().WithPayload(&models.Error{Message: err.Error()})
+		default:
+			return containers.NewContainerRemoveInternalServerError()
+		}
+	}
+
+	return containers.NewContainerRemoveOK()
 }
 
 // utility function to convert from a Container type to the API Model ContainerInfo (which should prob be called ContainerDetail)

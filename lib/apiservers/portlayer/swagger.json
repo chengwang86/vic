@@ -1365,6 +1365,46 @@
 						}
 					}
 				}
+			},
+			"rename": {
+				"description": "Rename a container to the new name",
+				"operationId": "ContainerRename",
+				"tags": [
+					"containers"
+				],
+				"consumes": [
+					"application/octet-stream"
+				],
+				"parameters": [
+					{
+						"name": "id",
+						"required": true,
+						"in": "path",
+						"description": "The container id",
+						"type": "string"
+					},
+					{
+						"name": "name",
+						"required": true,
+						"in": "query",
+						"description": "New name for the container",
+						"type": "string"
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "no error"
+					},
+					"404": {
+						"description": "no such container"
+					},
+					"409": {
+						"description": "conflict, name already assigned"
+					},
+					"500": {
+						"description": "server error"
+					}
+				}
 			}
 		},
 		"/containers/{handle}": {
