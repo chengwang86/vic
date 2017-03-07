@@ -91,7 +91,7 @@ func (handler *ContainersHandlersImpl) CreateHandler(params containers.CreatePar
 	}
 
 	m := &executor.ExecutorConfig{
-		Common: executor.Common{
+		CommonSpecForVM: executor.CommonSpecForVM{
 			ID:   id,
 			Name: params.CreateConfig.Name,
 		},

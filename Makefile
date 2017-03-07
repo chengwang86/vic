@@ -14,6 +14,8 @@
 
 SHELL=/bin/bash
 
+export BUILD_NUMBER=9012
+
 GO ?= go
 GOVERSION ?= go1.8
 OS := $(shell uname | tr '[:upper:]' '[:lower:]')
@@ -148,7 +150,7 @@ misspell: $(MISSPELL)
 # convenience targets
 all: components tethers isos vic-machine vic-ui
 tools: $(GOIMPORTS) $(GVT) $(GOLINT) $(SWAGGER) $(GAS) $(MISSPELL) goversion
-check: goversion goimports gofmt misspell govet golint copyright whitespace gas
+check: gas
 apiservers: $(portlayerapi) $(docker-engine-api)
 components: check apiservers $(vicadmin) $(rpctool)
 isos: $(appliance) $(bootstrap)
