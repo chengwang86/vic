@@ -121,6 +121,8 @@ var (
 	cbpLock         sync.Mutex
 	containerByPort map[string]string // port:containerID
 
+	crLock sync.Mutex
+
 	ctx = context.TODO()
 )
 
@@ -393,7 +395,53 @@ func (c *Container) ContainerPause(name string) error {
 // to find the container. An error is returned if newName is already
 // reserved.
 func (c *Container) ContainerRename(oldName, newName string) error {
-	return fmt.Errorf("%s does not yet implement ContainerRename", ProductName())
+	defer trace.End(trace.Begin(newName))
+
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("Neither old nor new names may be empty")
+	}
+
+	var err error
+
+	// bail early if container name already exists
+	if exists := cache.ContainerCache().GetContainer(newName); exists != nil {
+		err = fmt.Errorf("Conflict. The name %q is already in use by container %s. You have to remove (or rename) that container to be able to re use that name.", newName, exists.ContainerID)
+		log.Errorf("%s", err.Error())
+		return derr.NewRequestConflictError(err)
+	}
+
+	// Look up the container name in the metadata cache to get long ID
+	vc := cache.ContainerCache().GetContainer(oldName)
+	if vc == nil {
+		log.Errorf("Container %s not found", oldName)
+		return NotFoundError(oldName)
+	}
+
+	oldName = vc.Name
+	if oldName == newName {
+		err = fmt.Errorf("Renaming a container with the same name as its current name")
+		log.Errorf("%s", err.Error())
+		return err
+	}
+
+	//crLock.Lock()
+	//defer crLock.Unlock()
+
+	// To DO: Update link, alias, etc.
+
+	if err = c.containerProxy.Rename(vc, newName); err != nil {
+		log.Errorf("Rename error: %s", err)
+		return err
+	}
+
+	// If no error returns, we can safely rename the container
+	//vc.Name = newName
+
+	actor := CreateContainerEventActorWithAttributes(vc, map[string]string{"newName": fmt.Sprintf("%s", newName)})
+
+	EventService().Log("Rename", eventtypes.ContainerEventType, actor)
+
+	return nil
 }
 
 // ContainerResize changes the size of the TTY of the process running

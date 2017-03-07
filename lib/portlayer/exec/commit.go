@@ -28,7 +28,6 @@ import (
 	"github.com/vmware/vic/pkg/vsphere/vm"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/docker/docker/pkg/stringid"
 )
 
 const maxVMNameLength = 80
@@ -97,21 +96,7 @@ func Commit(ctx context.Context, sess *session.Session, h *Handle, waitTime *int
 		h.Spec = nil
 
 		// reconfigure vm display name to containerName-containerID
-		shortID := stringid.TruncateID(c.ExecConfig.ID)
-		nameMaxLen := maxVMNameLength - len(shortID)
-		prettyName := c.ExecConfig.Name
-		if len(prettyName) > nameMaxLen-1 {
-			prettyName = prettyName[:nameMaxLen-1]
-		}
-
-		fullName := fmt.Sprintf("%s-%s", prettyName, shortID)
-		task, err := h.vm.VirtualMachine.Rename(ctx, fullName)
-		if err != nil {
-			return err
-		}
-
-		_, err = task.WaitForResult(ctx, nil)
-		if err != nil {
+		if err = c.UpdateDisplayName(ctx); err != nil {
 			return err
 		}
 
@@ -164,17 +149,18 @@ func Commit(ctx context.Context, sess *session.Session, h *Handle, waitTime *int
 			s.ChangeVersion = h.Config.ChangeVersion
 			log.Debugf("ChangeVersion is %s", s.ChangeVersion)
 
-			// nilify ExtraConfig if vm is running
-			if h.Runtime.PowerState != types.VirtualMachinePowerStatePoweredOff {
-				log.Debugf("Nilifying ExtraConfig as we are running")
-				s.ExtraConfig = nil
-			}
 			// nilify ExtraConfig if container configuration is migrated
 			// in this case, VCH and container are in different version. Migrated configuration cannot be written back to old container, to avoid data loss in old version's container
 			if h.Migrated {
 				log.Debugf("Nilifying ExtraConfig as configuration of container %s is migrated", h.ExecConfig.ID)
 				s.ExtraConfig = nil
 			}
+
+			//// nilify ExtraConfig if vm is running
+			//if h.Runtime.PowerState != types.VirtualMachinePowerStatePoweredOff {
+			//	log.Debugf("Nilifying ExtraConfig as we are running")
+			//	s.ExtraConfig = nil
+			//}
 
 			_, err := h.vm.WaitForResult(ctx, func(ctx context.Context) (tasks.Task, error) {
 				return h.vm.Reconfigure(ctx, *s)

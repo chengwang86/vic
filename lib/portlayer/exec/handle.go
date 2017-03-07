@@ -186,9 +186,18 @@ func (h *Handle) Commit(ctx context.Context, sess *session.Session, waitTime *in
 		}
 	}
 
-	extraconfig.Encode(extraconfig.MapSink(cfg), h.ExecConfig)
+	//extraconfig.Encode(extraconfig.MapSink(cfg), h.ExecConfig)
 	s := h.Spec.Spec()
-	s.ExtraConfig = append(s.ExtraConfig, vmomi.OptionValueFromMap(cfg)...)
+	//s.ExtraConfig = append(s.ExtraConfig, vmomi.OptionValueFromMap(cfg)...)
+
+	// if runtime is nil, should be fresh container create
+	if h.Runtime == nil || h.Runtime.PowerState == types.VirtualMachinePowerStatePoweredOff || h.TargetState() == StateStopped {
+		extraconfig.Encode(extraconfig.MapSink(cfg), h.ExecConfig)
+		s.ExtraConfig = append(s.ExtraConfig, vmomi.OptionValueFromMap(cfg)...)
+	} else {
+		extraconfig.Encode(extraconfig.ScopeFilterSink(extraconfig.NonPersistent|extraconfig.Hidden, extraconfig.MapSink(cfg)), h.ExecConfig)
+		s.ExtraConfig = append(s.ExtraConfig, vmomi.OptionValueFromMap(cfg)...)
+	}
 
 	if err := Commit(ctx, sess, h, waitTime); err != nil {
 		return err

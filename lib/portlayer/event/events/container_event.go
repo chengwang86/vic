@@ -28,6 +28,7 @@ const (
 	ContainerMigrated      = "Migrated"
 	ContainerMigratedByDrs = "MigratedByDrs"
 	ContainerRelocated     = "Relocated"
+	ContainerRenamed     = "Renamed"
 )
 
 type ContainerEvent struct {
