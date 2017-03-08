@@ -65,15 +65,15 @@ type Common struct {
 	Notes string `vic:"0.1" scope:"hidden" key:"notes"`
 }
 
-type NewVirtualContainerHostConfigSpec struct {
-	NewExecutorConfig `vic:"0.1" scope:"read-only" key:"init"`
+type UpdatedVCHConfigSpec struct {
+	UpdatedExecutorConfig `vic:"0.1" scope:"read-only" key:"init"`
 }
 
-type NewExecutorConfig struct {
-	CommonSpecForVM `vic:"0.1" scope:"read-only" key:"common"`
+type UpdatedExecutorConfig struct {
+	UpdatedCommon `vic:"0.1" scope:"read-only" key:"common"`
 }
 
-type CommonSpecForVM struct {
+type UpdatedCommon struct {
 	// A reference to the components hosting execution environment, if any
 	ExecutionEnvironment string
 
@@ -92,17 +92,22 @@ func (p *AddCommonSpecForVCH) Migrate(ctx context.Context, s *session.Session, d
 	if data == nil {
 		return nil
 	}
-	mapData := data.(map[string]string)
+	mapData, ok := data.(map[string]string)
+	if !ok {
+		// Log the error here and return nil so that other plugins can proceed
+		log.Errorf("Migration data format is not map: %+v", data)
+		return nil
+	}
 	oldStruct := &VirtualContainerHostConfigSpec{}
 	result := extraconfig.Decode(extraconfig.MapSource(mapData), oldStruct)
 	log.Debugf("The oldStruct is %+v", oldStruct)
 	if result == nil {
-		return &errors.DecodeError{}
+		return &errors.DecodeError{Err: fmt.Errorf("decode oldStruct %+v failed", oldStruct)}
 	}
 
-	newStruct := &NewVirtualContainerHostConfigSpec{
-		NewExecutorConfig: NewExecutorConfig{
-			CommonSpecForVM: CommonSpecForVM{
+	newStruct := &UpdatedVCHConfigSpec{
+		UpdatedExecutorConfig: UpdatedExecutorConfig{
+			UpdatedCommon: UpdatedCommon{
 				Name:                 oldStruct.Name,
 				ID:                   oldStruct.ID,
 				ExecutionEnvironment: oldStruct.ExecutionEnvironment,
