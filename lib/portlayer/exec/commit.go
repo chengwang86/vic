@@ -95,8 +95,8 @@ func Commit(ctx context.Context, sess *session.Session, h *Handle, waitTime *int
 		// processing
 		h.Spec = nil
 
-		// reconfigure vm display name to containerName-containerID
-		if err = c.UpdateDisplayName(ctx); err != nil {
+		// reconfigure vm display name to containerName-containerShortID
+		if err = c.UpdateDisplayName(ctx, c.ExecConfig.Name); err != nil {
 			return err
 		}
 

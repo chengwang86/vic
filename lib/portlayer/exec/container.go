@@ -557,7 +557,7 @@ func (c *Container) Remove(ctx context.Context, sess *session.Session) error {
 }
 
 // Update the VM display name on vSphere UI
-func (c *Container) UpdateDisplayName(ctx context.Context) error {
+func (c *Container) UpdateDisplayName(ctx context.Context, newName string) error {
 	defer trace.End(trace.Begin(c.ExecConfig.ID))
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -568,7 +568,7 @@ func (c *Container) UpdateDisplayName(ctx context.Context) error {
 
 	shortID := stringid.TruncateID(c.ExecConfig.ID)
 	nameMaxLen := maxVMNameLength - len(shortID)
-	prettyName := c.ExecConfig.Name
+	prettyName := newName
 	if len(prettyName) > nameMaxLen-1 {
 		prettyName = prettyName[:nameMaxLen-1]
 	}
@@ -583,6 +583,30 @@ func (c *Container) UpdateDisplayName(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// Rename renames a containerVM with the new name
+func (c *Container) Rename(ctx context.Context, sess *session.Session, newName string) error {
+	defer trace.End(trace.Begin(c.ExecConfig.ID))
+	log.Infof("The new name is: %s", newName)
+
+	if err := c.UpdateDisplayName(ctx, newName); err != nil {
+		return err
+	}
+
+	c.m.Lock()
+	defer c.m.Unlock()
+
+
+
+	// update network config
+
+	// update vm guestinfo
+	c.ExecConfig.Name = newName
+
+	publishContainerEvent(c.ExecConfig.ID, time.Now(), events.ContainerRenamed)
 
 	return nil
 }
@@ -656,45 +680,4 @@ func convertInfraContainers(ctx context.Context, sess *session.Session, vms []mo
 	}
 
 	return cons
-}
-
-// Rename renames a containerVM with the new name
-func (c *Container) Rename(ctx context.Context, sess *session.Session, newName string) error {
-	defer trace.End(trace.Begin(c.ExecConfig.ID))
-	log.Infof("The new name is: %s", newName)
-
-	c.m.Lock()
-	defer c.m.Unlock()
-
-	if c.vm == nil {
-		return NotFoundError{}
-	}
-
-	// update vm display name to containerName-containerID
-	shortID := stringid.TruncateID(c.ExecConfig.ID)
-	nameMaxLen := maxVMNameLength - len(shortID)
-	prettyName := newName
-	if len(prettyName) > nameMaxLen-1 {
-		prettyName = prettyName[:nameMaxLen-1]
-	}
-
-	fullName := fmt.Sprintf("%s-%s", prettyName, shortID)
-	task, err := c.vm.VirtualMachine.Rename(ctx, fullName)
-	if err != nil {
-		return err
-	}
-
-	_, err = task.WaitForResult(ctx, nil)
-	if err != nil {
-		return err
-	}
-
-	// update network config
-
-	// update vm guestinfo
-	c.ExecConfig.Name = newName
-
-	publishContainerEvent(c.ExecConfig.ID, time.Now(), events.ContainerRenamed)
-
-	return nil
 }

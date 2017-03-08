@@ -424,10 +424,10 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 		return containers.NewContainerRenameNotFound()
 	}
 
-	//// Rename on container version < 3 is not supported
-	//if container.ExecConfig.Version == nil || container.ExecConfig.Version.PluginVersion < 3 {
-	//	return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("rename on container with older version is not supported")})
-	//}
+	// Rename on container version < 3 is not supported
+	if container.ExecConfig.Version == nil || container.ExecConfig.Version.PluginVersion < 3 {
+		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("rename is not supported on containers created by VIC Engine version < 0.9")})
+	}
 
 	err := container.Rename(context.Background(), handler.handlerCtx.Session, params.Name)
 	if err != nil {
@@ -442,9 +442,6 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 	}
 
 	h.ExecConfig.CommonSpecForVM.Name = params.Name
-	//if err = h.Commit(context.Background(), handler.handlerCtx.Session, nil); err != nil {
-	//	return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("failed to commit new name")})
-	//}
 
 	return containers.NewContainerRenameNoContent()
 }

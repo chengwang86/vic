@@ -424,8 +424,6 @@ func (c *Container) ContainerRename(oldName, newName string) error {
 		return err
 	}
 
-	// To DO: Update link, alias, etc.
-
 	if err = c.containerProxy.Rename(vc, newName); err != nil {
 		log.Errorf("Rename error: %s", err)
 		return err
