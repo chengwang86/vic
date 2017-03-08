@@ -93,7 +93,7 @@ func (handler *ContainersHandlersImpl) CreateHandler(params containers.CreatePar
 	}
 
 	m := &executor.ExecutorConfig{
-		Common: executor.Common{
+		CommonSpecForVM: executor.CommonSpecForVM{
 			ID:   id,
 			Name: params.CreateConfig.Name,
 		},
@@ -441,10 +441,10 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 		}
 	}
 
-	h.ExecConfig.Common.Name = params.Name
-	if err = h.Commit(context.Background(), handler.handlerCtx.Session, nil); err != nil {
-		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("failed to commit new name")})
-	}
+	h.ExecConfig.CommonSpecForVM.Name = params.Name
+	//if err = h.Commit(context.Background(), handler.handlerCtx.Session, nil); err != nil {
+	//	return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("failed to commit new name")})
+	//}
 
 	return containers.NewContainerRenameNoContent()
 }

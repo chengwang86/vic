@@ -21,6 +21,8 @@ import (
 
 	"github.com/docker/docker/pkg/truncindex"
 
+	"fmt"
+
 	"github.com/vmware/vic/lib/apiservers/engine/backends/container"
 )
 
@@ -98,4 +100,25 @@ func (cc *CCache) DeleteContainer(nameOrID string) {
 	if err := cc.idIndex.Delete(container.ContainerID); err != nil {
 		log.Warnf("Error deleting ID from index: %s", err)
 	}
+}
+
+func (cc *CCache) UpdateContainerName(oldName, newName string) error {
+	cc.m.Lock()
+	defer cc.m.Unlock()
+
+	container := cc.getContainer(oldName)
+	if container == nil {
+		return fmt.Errorf("No such container: %s", oldName)
+	}
+
+	delete(cc.containersByName, container.Name)
+	if exists := cc.getContainer(newName); exists != nil {
+		err := fmt.Errorf("Conflict in container cache. The name %q is already in use by container %s.", newName, exists.ContainerID)
+		log.Errorf("%s", err.Error())
+		return err
+	}
+	container.Name = newName
+	cc.containersByName[newName] = container
+	
+	return nil
 }

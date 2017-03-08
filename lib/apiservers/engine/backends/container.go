@@ -424,9 +424,6 @@ func (c *Container) ContainerRename(oldName, newName string) error {
 		return err
 	}
 
-	//crLock.Lock()
-	//defer crLock.Unlock()
-
 	// To DO: Update link, alias, etc.
 
 	if err = c.containerProxy.Rename(vc, newName); err != nil {
@@ -434,8 +431,11 @@ func (c *Container) ContainerRename(oldName, newName string) error {
 		return err
 	}
 
-	// If no error returns, we can safely rename the container
-	//vc.Name = newName
+	// Update containerCache
+	if err = cache.ContainerCache().UpdateContainerName(oldName, newName); err != nil {
+		log.Errorf("Failed to update container cache: %s", err)
+		return err
+	}
 
 	actor := CreateContainerEventActorWithAttributes(vc, map[string]string{"newName": fmt.Sprintf("%s", newName)})
 

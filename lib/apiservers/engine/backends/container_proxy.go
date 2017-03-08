@@ -602,7 +602,20 @@ func (c *ContainerProxy) Rename(vc *viccontainer.VicContainer, newName string) e
 		}
 	}
 
-	vc.Name = newName
+	// commit handle
+	_, err = client.Containers.Commit(containers.NewCommitParamsWithContext(ctx).WithHandle(handle))
+	if err != nil {
+		switch err := err.(type) {
+		case *containers.CommitNotFound:
+			return derr.NewRequestNotFoundError(fmt.Errorf(err.Payload.Message))
+
+		case *containers.CommitDefault:
+			return derr.NewErrorWithStatusCode(fmt.Errorf(err.Payload.Message), http.StatusInternalServerError)
+
+		default:
+			return derr.NewErrorWithStatusCode(err, http.StatusInternalServerError)
+		}
+	}
 
 	return nil
 
