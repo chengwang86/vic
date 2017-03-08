@@ -19,7 +19,6 @@ import (
 	"html/template"
 	"io/ioutil"
 	"net"
-	"os"
 	"path"
 	"sort"
 	"strings"
@@ -36,11 +35,13 @@ import (
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 	"github.com/vmware/vic/lib/config"
+	"github.com/vmware/vic/lib/guest"
 	"github.com/vmware/vic/lib/install/validate"
 	"github.com/vmware/vic/lib/tether"
 	"github.com/vmware/vic/pkg/trace"
 	"github.com/vmware/vic/pkg/version"
 	"github.com/vmware/vic/pkg/vsphere/session"
+	"github.com/vmware/vic/pkg/vsphere/vm"
 )
 
 type Validator struct {
@@ -112,13 +113,7 @@ func NewValidator(ctx context.Context, vch *config.VirtualContainerHostConfigSpe
 	log.Infof("Setting version to %s", v.Version)
 
 	// VCH Name
-	var err error
-	v.Hostname, err = os.Hostname()
-	if err != nil {
-		v.Hostname = "VCH"
-	}
-
-	log.Infof("Setting hostname to %s", v.Hostname)
+	v.Hostname = GetVCHName(ctx, sess)
 
 	// System time
 	v.SystemTime = time.Now().Format(time.UnixDate)
@@ -209,12 +204,31 @@ func NewValidator(ctx context.Context, vch *config.VirtualContainerHostConfigSpe
 		v.DockerPort = fmt.Sprintf("%d", opts.DefaultTLSHTTPPort)
 	}
 
-	err = v.QueryDatastore(ctx, vch, sess)
+	err := v.QueryDatastore(ctx, vch, sess)
 	if err != nil {
 		log.Errorf("Had a problem querying the datastores: %s", err.Error())
 	}
 	v.QueryVCHStatus(vch, sess)
 	return v
+}
+
+func GetVCHName(ctx context.Context, sess *session.Session) string {
+	defer trace.End(trace.Begin(""))
+
+	var vchName = fmt.Sprintf("VCH")
+	self, err := guest.GetSelf(ctx, sess)
+	if err != nil || self == nil {
+		log.Errorf("Unable to get VCH name due to unknown self-reference: %s", err)
+		log.Infof("Setting the VCH name to VCH")
+		return vchName
+	}
+	self2 := vm.NewVirtualMachineFromVM(ctx, sess, self)
+	vchName, err = self2.Name(ctx)
+	if err != nil {
+		log.Infof("Unable to get VCH name: %s", err)
+	}
+	log.Infof("Setting the VCH name to %s", vchName)
+	return vchName
 }
 
 type dsList []mo.Datastore

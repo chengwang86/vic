@@ -31,7 +31,7 @@ import (
 // If only a couple of items changed in the configuration, you don't have to copy all VirtualContainerHost. Only define the few items used by
 // this upgrade plugin will simplify the extraconfig encoding/decoding process
 const (
-	version = 1
+	version = 4
 	target  = manager.ApplianceConfigure
 )
 
