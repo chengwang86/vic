@@ -592,12 +592,12 @@ func (c *Container) Rename(ctx context.Context, sess *session.Session, newName s
 	defer trace.End(trace.Begin(c.ExecConfig.ID))
 	log.Infof("The new name is: %s", newName)
 
-	//if err := c.UpdateDisplayName(ctx, newName); err != nil {
-	//	return err
-	//}
-	shortID := c.ExecConfig.ID[:12]
-	prettyName := newName
-	c.Config.Name = fmt.Sprintf("%s-%s", prettyName, shortID)
+	if err := c.UpdateDisplayName(ctx, newName); err != nil {
+		return err
+	}
+	//shortID := c.ExecConfig.ID[:12]
+	//prettyName := newName
+	//c.Config.Name = fmt.Sprintf("%s-%s", prettyName, shortID)
 
 	c.m.Lock()
 	defer c.m.Unlock()
