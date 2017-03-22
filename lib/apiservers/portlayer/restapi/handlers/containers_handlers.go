@@ -443,6 +443,11 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 
 	h.ExecConfig.CommonSpecForVM.Name = params.Name
 
+	if err = h.Commit(context.Background(), handler.handlerCtx.Session, nil); err != nil {
+		log.Errorf("Failed to commit handle for container %s: %s", h.ExecConfig.ID, err)
+		return containers.NewContainerRenameInternalServerError().WithPayload(err)
+	}
+
 	return containers.NewContainerRenameNoContent()
 }
 
