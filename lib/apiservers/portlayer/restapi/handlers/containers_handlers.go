@@ -38,11 +38,10 @@ import (
 	"github.com/vmware/vic/pkg/trace"
 	"github.com/vmware/vic/pkg/uid"
 	"github.com/vmware/vic/pkg/version"
-	"github.com/docker/swarmkit/manager/state"
 )
 
 const (
-	containerWaitTimeout = 3 * time.Minute
+	containerWaitTimeout    = 3 * time.Minute
 	supportVersionForRename = 2
 )
 
@@ -438,12 +437,10 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 
 	// rename on running containers is not supported
 	if container.CurrentState().String() != "Stopped" {
-		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("rename is not supported on stopped container")})
+		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("rename is only supported on stopped container")})
 	}
 
 	h = h.Rename(params.Name)
-
-	// TODO: update containerName in portlayer containerCache. Where and when should we update the cache? here the handle is not committed yet
 
 	return containers.NewContainerRenameOK().WithPayload(h.String())
 }
