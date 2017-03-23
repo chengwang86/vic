@@ -415,18 +415,22 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 
 	h := exec.GetHandle(params.Handle)
 	if h == nil || h.ExecConfig == nil {
-		return containers.NewGetStateNotFound()
+		return containers.NewContainerRenameNotFound()
 	}
 
 	// get the indicated container for rename
 	container := exec.Containers.Container(h.ExecConfig.ID)
 	if container == nil {
+		return containers.NewContainerRenameConflict()
+	}
+
+	if container.ExecConfig.Name == params.Name {
 		return containers.NewContainerRenameNotFound()
 	}
 
-	// Rename on container version < 3 is not supported
-	if container.ExecConfig.Version == nil || container.ExecConfig.Version.PluginVersion < 3 {
-		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("rename is not supported on containers created by VIC Engine version < 0.9")})
+	// Rename on container version < 2 is not supported: TODO: move to container.go
+	if container.ExecConfig.Version == nil || container.ExecConfig.Version.PluginVersion < 2 {
+		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("container %s does not support rename", container.ExecConfig.Name)})
 	}
 
 	err := container.Rename(context.Background(), handler.handlerCtx.Session, params.Name)
@@ -434,21 +438,20 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 		switch err.(type) {
 		case exec.NotFoundError:
 			return containers.NewContainerRenameNotFound()
-		//case "":
-		//	return containers.NewContainerRenameConflict()
 		default:
-			return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("")})
+			return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: err.Error()})
 		}
 	}
 
 	h.ExecConfig.CommonSpecForVM.Name = params.Name
+	shortID := h.ExecConfig.ID[:12]
+	prettyName := params.Name
+	h.Spec.Spec().Name = fmt.Sprintf("%s-%s", prettyName, shortID)
 
-	if err = h.Commit(context.Background(), handler.handlerCtx.Session, nil); err != nil {
-		log.Errorf("Failed to commit handle for container %s: %s", h.ExecConfig.ID, err)
-		return containers.NewContainerRenameInternalServerError().WithPayload(err)
+	res := &models.RenameContainerResponse{
+		Handle:    h.String(),
 	}
-
-	return containers.NewContainerRenameNoContent()
+	return containers.NewContainerRenameOK().WithPayload(res)
 }
 
 // utility function to convert from a Container type to the API Model ContainerInfo (which should prob be called ContainerDetail)

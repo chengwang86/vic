@@ -1550,14 +1550,23 @@
 					}
 				],
 				"responses": {
-					"204": {
-						"description": "no error"
+					"200": {
+						"description": "OK",
+						"schema": {
+							"type": "string"
+						}
 					},
 					"404": {
-						"description": "no such container"
+						"description": "no such container",
+						"schema": {
+							"$ref": "#/definitions/Error"
+						}
 					},
 					"409": {
-						"description": "conflict, name already assigned"
+						"description": "conflict, name already assigned",
+						"schema": {
+							"$ref": "#/definitions/Error"
+						}
 					},
 					"500": {
 						"description": "server error",

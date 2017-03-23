@@ -590,7 +590,7 @@ func (c *ContainerProxy) Rename(vc *viccontainer.VicContainer, newName string) e
 	}
 
 	// Call the rename functionality in the portlayer.
-	_, err = client.Containers.ContainerRename(containers.NewContainerRenameParamsWithContext(ctx).WithName(newName).WithHandle(handle))
+	result, err := client.Containers.ContainerRename(containers.NewContainerRenameParamsWithContext(ctx).WithName(newName).WithHandle(handle))
 	if err != nil {
 		switch err := err.(type) {
 		case *containers.ContainerRenameNotFound:
@@ -601,9 +601,10 @@ func (c *ContainerProxy) Rename(vc *viccontainer.VicContainer, newName string) e
 			return InternalServerError(err.Error())
 		}
 	}
+	h := result.Payload.Handle
 
 	// commit handle
-	_, err = client.Containers.Commit(containers.NewCommitParamsWithContext(ctx).WithHandle(handle))
+	_, err = client.Containers.Commit(containers.NewCommitParamsWithContext(ctx).WithHandle(h))
 	if err != nil {
 		switch err := err.(type) {
 		case *containers.CommitNotFound:
