@@ -38,9 +38,13 @@ import (
 	"github.com/vmware/vic/pkg/trace"
 	"github.com/vmware/vic/pkg/uid"
 	"github.com/vmware/vic/pkg/version"
+	"github.com/docker/swarmkit/manager/state"
 )
 
-const containerWaitTimeout = 3 * time.Minute
+const (
+	containerWaitTimeout = 3 * time.Minute
+	supportVersionForRename = 2
+)
 
 // ContainersHandlersImpl is the receiver for all of the exec handler methods
 type ContainersHandlersImpl struct {
@@ -409,9 +413,7 @@ func (handler *ContainersHandlersImpl) ContainerWaitHandler(params containers.Co
 }
 
 func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.ContainerRenameParams) middleware.Responder {
-	defer trace.End(trace.Begin(params.Handle))
-
-	log.Infof("The new name is: %s", params.Name)
+	defer trace.End(trace.Begin(fmt.Sprintf("Rename container to %s", params.Name)))
 
 	h := exec.GetHandle(params.Handle)
 	if h == nil || h.ExecConfig == nil {
@@ -428,30 +430,22 @@ func (handler *ContainersHandlersImpl) RenameContainerHandler(params containers.
 		return containers.NewContainerRenameNotFound()
 	}
 
-	// Rename on container version < 2 is not supported: TODO: move to container.go
-	if container.ExecConfig.Version == nil || container.ExecConfig.Version.PluginVersion < 2 {
+	// rename on container version < supportVersionForRename is not supported
+	if container.ExecConfig.Version == nil || container.ExecConfig.Version.PluginVersion < supportVersionForRename {
 		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("container %s does not support rename", container.ExecConfig.Name)})
 	}
+	log.Infof("The container version is: %d", container.ExecConfig.Version.PluginVersion)
 
-	err := container.Rename(context.Background(), handler.handlerCtx.Session, params.Name)
-	if err != nil {
-		switch err.(type) {
-		case exec.NotFoundError:
-			return containers.NewContainerRenameNotFound()
-		default:
-			return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: err.Error()})
-		}
+	// rename on running containers is not supported
+	if container.CurrentState().String() != "Stopped" {
+		return containers.NewContainerRenameInternalServerError().WithPayload(&models.Error{Message: fmt.Sprintf("rename is not supported on stopped container")})
 	}
 
-	h.ExecConfig.CommonSpecForVM.Name = params.Name
-	shortID := h.ExecConfig.ID[:12]
-	prettyName := params.Name
-	h.Spec.Spec().Name = fmt.Sprintf("%s-%s", prettyName, shortID)
+	h = h.Rename(params.Name)
 
-	res := &models.RenameContainerResponse{
-		Handle:    h.String(),
-	}
-	return containers.NewContainerRenameOK().WithPayload(res)
+	// TODO: update containerName in portlayer containerCache. Where and when should we update the cache? here the handle is not committed yet
+
+	return containers.NewContainerRenameOK().WithPayload(h.String())
 }
 
 // utility function to convert from a Container type to the API Model ContainerInfo (which should prob be called ContainerDetail)

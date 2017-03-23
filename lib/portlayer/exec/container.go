@@ -587,23 +587,23 @@ func (c *Container) UpdateDisplayName(ctx context.Context, newName string) error
 	return nil
 }
 
-// Rename renames a containerVM with the new name
-func (c *Container) Rename(ctx context.Context, sess *session.Session, newName string) error {
-	defer trace.End(trace.Begin(c.ExecConfig.ID))
-	log.Infof("The new name is: %s", newName)
-
-
-	c.m.Lock()
-	defer c.m.Unlock()
-
-
-	// update network config
-
-
-	publishContainerEvent(c.ExecConfig.ID, time.Now(), events.ContainerRenamed)
-
-	return nil
-}
+//// Rename renames a containerVM with the new name
+//func (c *Container) Rename(ctx context.Context, sess *session.Session, newName string) error {
+//	defer trace.End(trace.Begin(c.ExecConfig.ID))
+//	log.Infof("The new name is: %s", newName)
+//
+//
+//	c.m.Lock()
+//	defer c.m.Unlock()
+//
+//
+//	// update network config
+//
+//
+//	publishContainerEvent(c.ExecConfig.ID, time.Now(), events.ContainerRenamed)
+//
+//	return nil
+//}
 
 // get the containerVMs from infrastructure for this resource pool
 func infraContainers(ctx context.Context, sess *session.Session) ([]*Container, error) {

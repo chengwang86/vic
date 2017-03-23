@@ -119,6 +119,7 @@ func (cc *CCache) UpdateContainerName(oldName, newName string) error {
 	}
 	container.Name = newName
 	cc.containersByName[newName] = container
+	cc.containersByID[container.ContainerID] = container
 	
 	return nil
 }

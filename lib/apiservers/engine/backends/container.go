@@ -403,13 +403,6 @@ func (c *Container) ContainerRename(oldName, newName string) error {
 
 	var err error
 
-	// bail early if container name already exists
-	if exists := cache.ContainerCache().GetContainer(newName); exists != nil {
-		err = fmt.Errorf("Conflict. The name %q is already in use by container %s. You have to remove (or rename) that container to be able to re use that name.", newName, exists.ContainerID)
-		log.Errorf("%s", err.Error())
-		return derr.NewRequestConflictError(err)
-	}
-
 	// Look up the container name in the metadata cache to get long ID
 	vc := cache.ContainerCache().GetContainer(oldName)
 	if vc == nil {
@@ -424,12 +417,20 @@ func (c *Container) ContainerRename(oldName, newName string) error {
 		return err
 	}
 
+	// TODO: lock the ContainerCache during the rename operation
+	// bail early if container name already exists
+	if exists := cache.ContainerCache().GetContainer(newName); exists != nil {
+		err = fmt.Errorf("Conflict. The name %q is already in use by container %s. You have to remove (or rename) that container to be able to re use that name.", newName, exists.ContainerID)
+		log.Errorf("%s", err.Error())
+		return derr.NewRequestConflictError(err)
+	}
+
 	if err = c.containerProxy.Rename(vc, newName); err != nil {
 		log.Errorf("Rename error: %s", err)
 		return err
 	}
 
-	// Update containerCache
+	// update containerCache
 	if err = cache.ContainerCache().UpdateContainerName(oldName, newName); err != nil {
 		log.Errorf("Failed to update container cache: %s", err)
 		return err

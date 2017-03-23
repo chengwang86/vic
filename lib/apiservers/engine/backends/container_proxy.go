@@ -596,12 +596,13 @@ func (c *ContainerProxy) Rename(vc *viccontainer.VicContainer, newName string) e
 		case *containers.ContainerRenameNotFound:
 			return NotFoundError(vc.Name)
 		case *containers.ContainerRenameConflict:
-			return derr.NewRequestConflictError(fmt.Errorf("ContainerName conflict in portlayer"))
+			return derr.NewRequestConflictError(fmt.Errorf("Container name collision in portlayer"))
 		default:
 			return InternalServerError(err.Error())
 		}
 	}
-	h := result.Payload.Handle
+
+	h := result.Payload
 
 	// commit handle
 	_, err = client.Containers.Commit(containers.NewCommitParamsWithContext(ctx).WithHandle(h))
@@ -609,17 +610,14 @@ func (c *ContainerProxy) Rename(vc *viccontainer.VicContainer, newName string) e
 		switch err := err.(type) {
 		case *containers.CommitNotFound:
 			return derr.NewRequestNotFoundError(fmt.Errorf(err.Payload.Message))
-
 		case *containers.CommitDefault:
 			return derr.NewErrorWithStatusCode(fmt.Errorf(err.Payload.Message), http.StatusInternalServerError)
-
 		default:
 			return derr.NewErrorWithStatusCode(err, http.StatusInternalServerError)
 		}
 	}
 
 	return nil
-
 }
 
 func (c *ContainerProxy) Wait(vc *viccontainer.VicContainer, timeout time.Duration) (
