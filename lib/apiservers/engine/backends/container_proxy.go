@@ -922,7 +922,6 @@ func (c *ContainerProxy) Rename(vc *viccontainer.VicContainer, newName string) e
 	return nil
 }
 
-
 //----------
 // Utility Functions
 //----------
