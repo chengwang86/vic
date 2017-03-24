@@ -1215,8 +1215,7 @@ func ContainerInfoToDockerContainerInspect(vc *viccontainer.VicContainer, info *
 			containerState.Running = true
 		}
 
-		//inspectJSON.Image = info.ContainerConfig.LayerID
-		inspectJSON.Image = vc.ImageID
+		inspectJSON.Image = info.ContainerConfig.LayerID
 		inspectJSON.LogPath = info.ContainerConfig.LogPath
 		inspectJSON.RestartCount = int(info.ContainerConfig.RestartCount)
 		inspectJSON.ID = info.ContainerConfig.ContainerID
