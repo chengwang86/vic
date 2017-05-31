@@ -92,7 +92,6 @@ func (c *Configure) Flags() []cli.Flag {
 	}
 
 	if c.Debug.Debug != nil {
-		log.Infof("-----------flags(), debug is: %d", *c.Debug.Debug)
 		c.Debug.IsSet = true
 	}
 
@@ -107,7 +106,6 @@ func (c *Configure) processParams() error {
 	}
 
 	if c.Debug.Debug != nil {
-		log.Infof("-----------processParams, 1")
 		c.Debug.IsSet = true
 	}
 
@@ -137,12 +135,7 @@ func (c *Configure) Run(clic *cli.Context) (err error) {
 		return err
 	}
 
-	if c.Debug.Debug != nil {
-		log.Infof("------------configure.go, 0")
-	}
-
 	if c.Debug.Debug != nil && *c.Debug.Debug > 0 {
-		log.Infof("----------configure.go, 1: %d", *c.Debug.Debug)
 		log.SetLevel(log.DebugLevel)
 		trace.Logger.Level = log.DebugLevel
 	}

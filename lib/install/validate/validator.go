@@ -323,14 +323,12 @@ func (v *Validator) ValidateTarget(ctx context.Context, input *data.Data) (*conf
 func (v *Validator) basics(ctx context.Context, input *data.Data, conf *config.VirtualContainerHostConfigSpec) {
 	defer trace.End(trace.Begin(""))
 
-	log.Infof("------------The data is: %+v", input)
-	// TODO: ensure that displayname doesn't violate constraints (length, characters, etc)
-	conf.SetName(input.DisplayName)
-	log.Infof("-------------debug is: %+v", *input.Debug.Debug)
 	if input.Debug.Debug != nil && *input.Debug.Debug > 0 {
-		log.Infof("-------------input.debug is: %+v", *input.Debug.Debug)
 		conf.SetDebug(*input.Debug.Debug)
 	}
+
+	// TODO: ensure that displayname doesn't violate constraints (length, characters, etc)
+	conf.SetName(input.DisplayName)
 	conf.Name = input.DisplayName
 	conf.Version = version.GetBuild()
 

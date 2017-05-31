@@ -16,6 +16,7 @@ package common
 
 import (
 	"gopkg.in/urfave/cli.v1"
+	"github.com/vmware/vic/pkg/flags"
 )
 
 type Debug struct {
@@ -25,9 +26,10 @@ type Debug struct {
 
 func (d *Debug) DebugFlags() []cli.Flag {
 	return []cli.Flag{
-		cli.IntFlag{
+		cli.GenericFlag{
 			Name:        "debug, v",
-			Destination: d.Debug,
+			//Destination: d.Debug,
+			Value:       flags.NewOptionalInt(&d.Debug),
 			Usage:       "[0(default),1...n], 0 is disabled, 1 is enabled, >= 1 may alter behaviour",
 			Hidden:      false,
 		},

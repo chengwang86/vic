@@ -40,7 +40,9 @@ Configure VCH
 
 Configure debug state
     Verify VCH Debug state  1
-    ${rc}  ${id1}=  Run And Return Rc And Output  docker %{VCH-PARAMS} run -itd busybox
+    ${rc}  ${output}=  Run And Return Rc And Output  docker %{VCH-PARAMS} pull ${busybox}
+    Should Be Equal As Integers  ${rc}  0
+    ${rc}  ${id1}=  Run And Return Rc And Output  docker %{VCH-PARAMS} run -itd ${busybox}
     Should Be Equal As Integers  ${rc}  0
     ${vm1}=  Get VM display name  ${id1}
     Verify Container Debug State  ${vm1}  1
@@ -48,7 +50,7 @@ Configure debug state
     Should Contain  ${output}  Completed successfully
     Verify VCH Debug state  0
     Verify Container Debug State  ${vm1}  1
-    ${rc}  ${id2}=  Run And Return Rc And Output  docker %{VCH-PARAMS} run -itd busybox
+    ${rc}  ${id2}=  Run And Return Rc And Output  docker %{VCH-PARAMS} run -itd ${busybox}
     Should Be Equal As Integers  ${rc}  0
     ${vm2}=  Get VM display name  ${id2}
     Verify Container Debug State  ${vm2}  0
