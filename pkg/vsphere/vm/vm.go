@@ -344,6 +344,24 @@ func (vm *VirtualMachine) GetSnapshotTreeByName(ctx context.Context, name string
 	return vm.bfsSnapshotTree(q, compareName), nil
 }
 
+
+// RemoveSnapshot removes a named snapshot
+func (v VirtualMachine) RemoveSnapshotByRef(ctx context.Context, snapshot *types.VirtualMachineSnapshotTree, removeChildren bool, consolidate *bool) (*object.Task, error) {
+	req := types.RemoveSnapshot_Task{
+		This:           snapshot.Snapshot,
+		RemoveChildren: removeChildren,
+		Consolidate:    consolidate,
+	}
+
+	res, err := methods.RemoveSnapshot_Task(ctx, v.Vim25(), &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return object.NewTask(v.Vim25(), res.Returnval), nil
+}
+
+
 // Finds a snapshot tree based on comparator function 'compare' via a breadth first search of the snapshot tree attached to the VM
 func (vm *VirtualMachine) bfsSnapshotTree(q *list.List, compare func(node types.VirtualMachineSnapshotTree) bool) *types.VirtualMachineSnapshotTree {
 	if q.Len() == 0 {

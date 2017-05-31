@@ -135,8 +135,8 @@ func NewDataFromConfig(ctx context.Context, finder Finder, conf *config.VirtualC
 	if err = setContainerNetworks(ctx, finder, d, conf.Network.ContainerNetworks, conf.BridgeNetwork); err != nil {
 		return
 	}
-
-	d.Debug.Debug = conf.Diagnostics.DebugLevel
+	log.Infof("---------config_to_data, debuglevel: %d", conf.Diagnostics.DebugLevel)
+	d.Debug.Debug = &conf.Diagnostics.DebugLevel
 	if conf.ExecutorConfig.Networks[config.PublicNetworkName] != nil {
 		d.DNS = conf.ExecutorConfig.Networks[config.PublicNetworkName].Network.Nameservers
 	}

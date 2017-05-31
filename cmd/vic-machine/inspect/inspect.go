@@ -107,7 +107,7 @@ func (i *Inspect) Run(clic *cli.Context) (err error) {
 		return err
 	}
 
-	if i.Debug.Debug > 0 {
+	if i.Debug.Debug != nil && *i.Debug.Debug > 0 {
 		log.SetLevel(log.DebugLevel)
 		trace.Logger.Level = log.DebugLevel
 	}
@@ -192,13 +192,17 @@ func (i Inspect) showCommand(ctx context.Context, finder validate.Finder, conf *
 	if err != nil {
 		return err
 	}
+	log.Infof("-------------data after NewDataFromConfig: %+v", data)
 	if err = validate.SetDataFromVM(ctx, finder, vm, data); err != nil {
 		return err
 	}
+	log.Infof("-------------data after setDataFromVM: %+v", data)
 	mapOptions, err := converter.DataToOption(data)
 	if err != nil {
 		return err
 	}
+
+	log.Infof("-------------mapOptions: %+v", mapOptions)
 
 	var options []string
 	for k, o := range mapOptions {

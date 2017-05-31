@@ -91,6 +91,11 @@ func (c *Configure) Flags() []cli.Flag {
 		flags = append(flags, f...)
 	}
 
+	if c.Debug.Debug != nil {
+		log.Infof("-----------flags(), debug is: %d", *c.Debug.Debug)
+		c.Debug.IsSet = true
+	}
+
 	return flags
 }
 
@@ -101,6 +106,11 @@ func (c *Configure) processParams() error {
 		return err
 	}
 
+	if c.Debug.Debug != nil {
+		log.Infof("-----------processParams, 1")
+		c.Debug.IsSet = true
+	}
+
 	return nil
 }
 
@@ -109,6 +119,11 @@ func (c *Configure) processParams() error {
 // creation process, for example, image store path, volume store path, network slot id, etc. So we'll copy changes based on user input
 func (c *Configure) copyChangedConf(o *config.VirtualContainerHostConfigSpec, n *config.VirtualContainerHostConfigSpec) {
 	//TODO: copy changed data
+
+	if c.Debug.IsSet {
+		o.SetDebug(n.Diagnostics.DebugLevel)
+	}
+
 }
 
 func (c *Configure) Run(clic *cli.Context) (err error) {
@@ -122,7 +137,12 @@ func (c *Configure) Run(clic *cli.Context) (err error) {
 		return err
 	}
 
-	if c.Debug.Debug > 0 {
+	if c.Debug.Debug != nil {
+		log.Infof("------------configure.go, 0")
+	}
+
+	if c.Debug.Debug != nil && *c.Debug.Debug > 0 {
+		log.Infof("----------configure.go, 1: %d", *c.Debug.Debug)
 		log.SetLevel(log.DebugLevel)
 		trace.Logger.Level = log.DebugLevel
 	}

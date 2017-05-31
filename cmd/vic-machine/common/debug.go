@@ -14,19 +14,22 @@
 
 package common
 
-import "gopkg.in/urfave/cli.v1"
+import (
+	"gopkg.in/urfave/cli.v1"
+)
 
 type Debug struct {
-	Debug int `cmd:"debug"`
+	Debug *int `cmd:"debug"`
+	IsSet bool
 }
 
 func (d *Debug) DebugFlags() []cli.Flag {
 	return []cli.Flag{
 		cli.IntFlag{
 			Name:        "debug, v",
-			Destination: &d.Debug,
+			Destination: d.Debug,
 			Usage:       "[0(default),1...n], 0 is disabled, 1 is enabled, >= 1 may alter behaviour",
-			Hidden:      true,
+			Hidden:      false,
 		},
 	}
 }
