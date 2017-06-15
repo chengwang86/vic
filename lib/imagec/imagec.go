@@ -445,10 +445,70 @@ func (ic *ImageC) CreateImageConfig(images []*ImageWithMeta) (metadata.ImageConf
 
 // PullImage pulls an image from docker hub
 func (ic *ImageC) PullImage() error {
-
-	// ctx
 	ctx, cancel := context.WithTimeout(ctx, ic.Options.Timeout)
 	defer cancel()
+
+	// Authenticate, get URL, get token
+	if err := ic.prepareTransfer(ctx); err != nil {
+		return err
+	}
+
+	// Output message
+	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
+	progress.Message(ic.progressOutput, "", tagOrDigest+": Pulling from "+ic.Image)
+
+	// Pull the image manifest
+	if err := ic.pullManifest(ctx); err != nil {
+		return err
+	}
+
+	// Get layers to download from manifest
+	layers, err := ic.LayersToDownload()
+	if err != nil {
+		return err
+	}
+	ic.ImageLayers = layers
+
+	// Download all the layers
+	if err := ldm.DownloadLayers(ctx, ic); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// PushImage pushes an image to a registry
+func (ic *ImageC) PushImage() error {
+	ctx, cancel := context.WithTimeout(ctx, ic.Options.Timeout)
+	defer cancel()
+
+	// Authenticate, get URL, get token
+	if err := ic.prepareTransfer(ctx); err != nil {
+		return err
+	}
+
+	// Output message
+	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
+	progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
+
+	// Create Image and manifest
+
+	// Upload all the layers
+	var lum LayerUploader
+	if err := lum.UploadLayers(ctx, ic); err != nil {
+		return err
+	}
+
+	// Push up the image manifest
+	if err := ic.pushManifest(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// prepareTransfer Looks up URLs and fetch auth token
+func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 
 	// Parse the -reference parameter
 	ic.ParseReference()
@@ -512,9 +572,11 @@ func (ic *ImageC) PullImage() error {
 		ic.Token = token
 	}
 
-	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
-	progress.Message(ic.progressOutput, "", tagOrDigest+": Pulling from "+ic.Image)
+	return nil
+}
 
+// pullManifest attempts to pull manifest for an image.  Attempts to get schema 2 but will fall back to schema 1.
+func (ic *ImageC) pullManifest(ctx context.Context) error {
 	// Get the schema1 manifest
 	manifest, digest, err := FetchImageManifest(ctx, ic.Options, 1, ic.progressOutput)
 	if err != nil {
@@ -537,6 +599,7 @@ func (ic *ImageC) PullImage() error {
 	ic.ImageManifestSchema1 = schema1
 	ic.ManifestDigest = digest
 
+	// Attempt to get schema2 manifest
 	manifest, digest, err = FetchImageManifest(ctx, ic.Options, 2, ic.progressOutput)
 	if err == nil {
 		if schema2, ok := manifest.(*schema2.DeserializedManifest); ok {
@@ -551,15 +614,20 @@ func (ic *ImageC) PullImage() error {
 		}
 	}
 
-	layers, err := ic.LayersToDownload()
-	if err != nil {
-		return err
-	}
-	ic.ImageLayers = layers
+	return nil
+}
 
-	err = ldm.DownloadLayers(ctx, ic)
-	if err != nil {
-		return err
+func (ic *ImageC) pushManifest(ctx context.Context) error {
+	if ic.ImageManifestSchema2 != nil {
+		if err := PushImageManifest(ctx, ic.ImageManifestSchema2, ic.Options, 2, ic.progressOutput, ic.progressOutput); err != nil {
+			return err
+		}
+	} else if ic.ImageManifestSchema1 != nil {
+		if err := PushImageManifest(ctx, ic.ImageManifestSchema1, ic.Options, 1, ic.progressOutput, ic.progressOutput); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("attempt to push manifest when non exist")
 	}
 
 	return nil

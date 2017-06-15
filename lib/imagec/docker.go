@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,8 @@ import (
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/reference"
 	"github.com/docker/libtrust"
+
+	"bytes"
 
 	urlfetcher "github.com/vmware/vic/pkg/fetcher"
 	registryutils "github.com/vmware/vic/pkg/registry"
@@ -361,6 +364,55 @@ func FetchImageManifest(ctx context.Context, options Options, schemaVersion int,
 
 	//We shouldn't really get here
 	return nil, "", fmt.Errorf("Unknown schema version %d requested!", schemaVersion)
+}
+
+// PutImageManifest simply pushes the manifest up to the registry.
+func PutImageManifest(ctx context.Context, manifest interface{}, ic Options, schemaVersion int, progressOutput progress.Output) error {
+	if schema2, ok := manifest.(*schema2.DeserializedManifest); !ok {
+	}
+
+	tr := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: options.InsecureSkipVerify,
+			RootCAs:            options.RootCAs,
+		},
+	}
+	client := &http.Client{Transport: tr}
+
+	// Create manifest push URL
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return nil, "", err
+	}
+
+	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
+	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
+	log.Debugf("URL: %s", url)
+
+	// Add content type headers
+	reqHeaders := make(http.Header)
+	var dataReader io.ByteReader
+
+	switch schemaVersion {
+	case 1: //schema 1, signed manifest
+		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
+		dataReader := bytes.NewReader(option)
+	case 2: //schema 2
+		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, url, data)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // decodeManifestSchema1() reads a manifest schema 1 and creates an imageC
