@@ -49,6 +49,7 @@ import (
 // ImageC is responsible for pulling docker images from a repository
 type ImageC struct {
 	Options
+	Pusher
 
 	// https://raw.githubusercontent.com/docker/docker/master/distribution/pull_v2.go
 	sf             *streamformatter.StreamFormatter
@@ -56,6 +57,7 @@ type ImageC struct {
 
 	// ImageLayers are sourced from the manifest file
 	ImageLayers []*ImageWithMeta
+
 	// ImageID is the docker ImageID calculated during download
 	ImageID string
 }
@@ -122,6 +124,11 @@ type ImageWithMeta struct {
 
 	Downloading bool
 }
+
+type Pusher struct {
+	schema2Manifest *schema2.DeserializedManifest
+}
+
 
 func (i *ImageWithMeta) String() string {
 	return stringid.TruncateID(i.Layer.BlobSum)
@@ -445,10 +452,77 @@ func (ic *ImageC) CreateImageConfig(images []*ImageWithMeta) (metadata.ImageConf
 
 // PullImage pulls an image from docker hub
 func (ic *ImageC) PullImage() error {
-
-	// ctx
 	ctx, cancel := context.WithTimeout(ctx, ic.Options.Timeout)
 	defer cancel()
+
+	// Authenticate, get URL, get token
+	if err := ic.prepareTransfer(ctx); err != nil {
+		return err
+	}
+
+	// Output message
+	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
+	progress.Message(ic.progressOutput, "", tagOrDigest+": Pulling from "+ic.Image)
+
+	// Pull the image manifest
+	if err := ic.pullManifest(ctx); err != nil {
+		return err
+	}
+
+	// Get layers to download from manifest
+	layers, err := ic.LayersToDownload()
+	if err != nil {
+		return err
+	}
+	ic.ImageLayers = layers
+
+	// Download all the layers
+	if err := ldm.DownloadLayers(ctx, ic); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// PushImage pushes an image to a registry
+func (ic *ImageC) PushImage() error {
+	ctx, cancel := context.WithTimeout(ctx, ic.Options.Timeout)
+	defer cancel()
+
+	// Authenticate, get URL, get token
+	if err := ic.prepareTransfer(ctx); err != nil {
+		return err
+	}
+
+	// Output message
+	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
+	progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
+
+	// Prep layers and manifest
+	if err := ic.PrepareManifestSchema2ToPush(); err != nil {
+		return err
+	}
+
+	if err := ic.PrepareLayersToPush(); err != nil {
+		return err
+	}
+
+	// Upload all the layers
+	var lum LayerUploader
+	if err := lum.UploadLayers(ctx, ic); err != nil {
+		return err
+	}
+
+	// Push up the image manifest
+	if err := ic.pushManifest(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// prepareTransfer Looks up URLs and fetch auth token
+func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 
 	// Parse the -reference parameter
 	ic.ParseReference()
@@ -512,9 +586,11 @@ func (ic *ImageC) PullImage() error {
 		ic.Token = token
 	}
 
-	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
-	progress.Message(ic.progressOutput, "", tagOrDigest+": Pulling from "+ic.Image)
+	return nil
+}
 
+// pullManifest attempts to pull manifest for an image.  Attempts to get schema 2 but will fall back to schema 1.
+func (ic *ImageC) pullManifest(ctx context.Context) error {
 	// Get the schema1 manifest
 	manifest, digest, err := FetchImageManifest(ctx, ic.Options, 1, ic.progressOutput)
 	if err != nil {
@@ -537,6 +613,7 @@ func (ic *ImageC) PullImage() error {
 	ic.ImageManifestSchema1 = schema1
 	ic.ManifestDigest = digest
 
+	// Attempt to get schema2 manifest
 	manifest, digest, err = FetchImageManifest(ctx, ic.Options, 2, ic.progressOutput)
 	if err == nil {
 		if schema2, ok := manifest.(*schema2.DeserializedManifest); ok {
@@ -551,15 +628,90 @@ func (ic *ImageC) PullImage() error {
 		}
 	}
 
-	layers, err := ic.LayersToDownload()
-	if err != nil {
-		return err
-	}
-	ic.ImageLayers = layers
+	return nil
+}
 
-	err = ldm.DownloadLayers(ctx, ic)
+func (ic *ImageC) PrepareManifestSchema2ToPush() error {
+	// get id of image from the reference
+	id, err := cache.RepositoryCache().Get(ic.Options.Reference)
 	if err != nil {
-		return err
+		return fmt.Errorf("Could not retrieve image id from repository cache using reference: %s", err)
+	}
+
+	// get the leaf layerID from repo cache using the image id
+	layerID := cache.RepositoryCache().GetLayerID(id)
+
+	// get the layer (ImageWithMeta) from the layer cache using the layer id
+	layer := LayerCache().Get(layerID)
+
+	// create []ManifestLayers to append the layers in
+	manifestLayerCount := 0
+	manifestLayers := make([]*ManifestLayer, manifestLayerCount)
+
+	// use the leaf layer to walk the chain of layers down to the base parent (scratch)
+	while( layer.Image.Parent != "") {
+		// TO-DO: call ReadArchive here and upload the returned tars
+
+		// add to the ManifestLayers[] by calculating layer digest and size
+		layerSize := layer.Size // ?
+		layerDigest := sha256.Sum256([]byte(layer)]) // ? or is it layer.Layer? needs to be tested
+
+		manifestLayers[manifestLayerCount] = &ManifestLayer {
+			Size: layerSize,
+			Digest: layerDigest,
+		}
+		manifestLayerCount++
+
+		// set the layer to the parent layer
+		layerID := layer.Image.Parent
+		layer := LayerCache().Get(layerID)
+
+	}
+
+
+	// get config and calculate digest/size, mediatype is constant
+	// TO-DO : figure out what config is supposed to be, ContainerConfig is no longer correct
+	config, err := cache.ImageCache().Get(id).ContainerConfig
+	if err != nil {
+		return fmt.Errorf("Could not retrieve config from image cache using id: %s", err)
+	}
+
+	configSize := len([]byte(config))
+	configDigest := "sha256:" + sha256.Sum256([]byte(config)])
+
+	config := &Config {
+		Size: configSize,
+		Digest: configDigest,
+	}
+
+	// build out Schema2Manifest with all generated components
+	ic.schema2Manifest = &schema2.Manifest {
+		manifest.Versioned: {
+			SchemaVersion:	2,
+			MediaType: schema2.MediaTypeManifest,
+		},
+		Config: config,
+		Layers: manifestLayers.
+	}
+
+	return nil
+}
+
+func (ic *imageC) PrepareLayersToPush() error {
+	return nil
+}
+
+func (ic *ImageC) pushManifest(ctx context.Context) error {
+	if ic.ImageManifestSchema2 != nil {
+		if err := PutImageManifest(ctx, ic.Pusher, ic.Options, 2, ic.progressOutput, ic.progressOutput); err != nil {
+			return err
+		}
+	} else if ic.ImageManifestSchema1 != nil {
+		if err := PutImageManifest(ctx, ic.ImageManifestSchema1, ic.Options, 1, ic.progressOutput, ic.progressOutput); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("attempt to push manifest when non exist")
 	}
 
 	return nil

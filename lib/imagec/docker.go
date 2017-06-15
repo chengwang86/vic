@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -298,6 +299,10 @@ func FetchImageBlob(ctx context.Context, options Options, image *ImageWithMeta, 
 	return diffID, nil
 }
 
+func PushImageBlob(ctx context.Context, options Options, progressOutput progress.Output) (err error) {
+	return nil
+}
+
 // tagOrDigest returns an image's digest if it's pulled by digest, or its tag
 // otherwise.
 func tagOrDigest(r reference.Named, tag string) string {
@@ -361,6 +366,59 @@ func FetchImageManifest(ctx context.Context, options Options, schemaVersion int,
 
 	//We shouldn't really get here
 	return nil, "", fmt.Errorf("Unknown schema version %d requested!", schemaVersion)
+}
+
+// PutImageManifest simply pushes the manifest up to the registry.
+func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
+	if schema2, ok := manifest.(*schema2.DeserializedManifest); !ok {
+	}
+
+	tr := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: options.InsecureSkipVerify,
+			RootCAs:            options.RegistryCAs,
+		},
+	}
+	client := &http.Client{Transport: tr}
+
+	// Create manifest push URL
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return err
+	}
+
+	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
+	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
+	log.Debugf("URL: %s", url)
+
+	// Add content type headers
+	reqHeaders := make(http.Header)
+	var dataReader io.ByteReader
+
+	switch schemaVersion {
+	case 1: //schema 1, signed manifest
+		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
+		log.Errorf("Schema 1 push not supported")
+	case 2: //schema 2
+		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
+		dataReader, err = getManifestSchema2Reader(options, manifest)
+		if err != nil {
+			log.Errorf("Failed to read manifest schema 2: %s", err.Error())
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodPut, url, dataReader)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // decodeManifestSchema1() reads a manifest schema 1 and creates an imageC
@@ -469,4 +527,12 @@ func getManifestDigest(content []byte, ref reference.Named) (string, error) {
 	// Correct Manifest Digest
 	log.Debugf("Manifest Digest: %v", digest)
 	return string(digest), nil
+}
+
+func getManifestSchema1Reader(options Options, manifest schema1.Manifest) (io.Reader, error) {
+	return nil, fmt.Errorf("Not implemented")
+}
+
+func getManifestSchema2Reader(options Options, manifest schema2.DeserializedManifest) (io.Reader, error) {
+	return nil, fmt.Errorf("Not implemented")
 }
