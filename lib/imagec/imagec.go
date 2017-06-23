@@ -443,6 +443,131 @@ func (ic *ImageC) CreateImageConfig(images []*ImageWithMeta) (metadata.ImageConf
 	return imageConfig, nil
 }
 
+// PushImage pushes an image to a registry
+func (ic *ImageC) PushImage() error {
+
+	// ctx
+	ctx, cancel := context.WithTimeout(ctx, ic.Options.Timeout)
+	defer cancel()
+
+	// Parse the -reference parameter
+	ic.ParseReference()
+
+	// Host is either the host's UUID (if run on vsphere) or the hostname of
+	// the system (if run standalone)
+	host, err := sys.UUID()
+	if err != nil {
+		log.Errorf("Failed to return host name: %s", err)
+		return err
+	}
+
+	if host != "" {
+		log.Infof("Using UUID (%s) for imagestore name", host)
+	} else if ic.Standalone {
+		host, err = os.Hostname()
+		log.Infof("Using host (%s) for imagestore name", host)
+	}
+
+	ic.Storename = host
+
+	if !ic.Standalone {
+		log.Debugf("Running with portlayer")
+
+		// Ping the server to ensure it's at least running
+		ok, err := PingPortLayer(ic.Host)
+		if err != nil || !ok {
+			log.Errorf("Failed to ping portlayer: %s", err)
+			return err
+		}
+	} else {
+		log.Debugf("Running standalone")
+	}
+
+	// Calculate (and overwrite) the registry URL and make sure that it responds to requests
+	ic.Registry, err = LearnRegistryURL(&ic.Options)
+	if err != nil {
+		log.Errorf("Error while pulling image: %s", err)
+		return err
+	}
+
+	// Get the URL of the OAuth endpoint
+	url, err := LearnAuthURL(ic.Options)
+	if err != nil {
+		log.Infof(err.Error())
+		switch err := err.(type) {
+		case urlfetcher.ImageNotFoundError:
+			return fmt.Errorf("Error: image %s not found", ic.Reference)
+		default:
+			return fmt.Errorf("Failed to obtain OAuth endpoint: %s", err)
+		}
+	}
+
+	// Get the OAuth token - if only we have a URL
+	if url != nil {
+		token, err := FetchToken(ctx, ic.Options, url, ic.progressOutput)
+		if err != nil {
+			log.Errorf("Failed to fetch OAuth token: %s", err)
+			return err
+		}
+		ic.Token = token
+	}
+
+	log.Debugf("The URL is: %+v", url)
+
+
+	//tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
+	//progress.Message(ic.progressOutput, "", tagOrDigest+": Pulling from "+ic.Image)
+	//
+	//// Get the schema1 manifest
+	//manifest, digest, err := FetchImageManifest(ctx, ic.Options, 1, ic.progressOutput)
+	//if err != nil {
+	//	log.Infof(err.Error())
+	//	switch err := err.(type) {
+	//	case urlfetcher.ImageNotFoundError:
+	//		return fmt.Errorf("Error: image %s not found", ic.Image)
+	//	case urlfetcher.TagNotFoundError:
+	//		return fmt.Errorf("Tag %s not found in repository %s", ic.Tag, ic.Image)
+	//	default:
+	//		return fmt.Errorf("Error while pulling image manifest: %s", err)
+	//	}
+	//}
+	//
+	//schema1, ok := manifest.(*Manifest)
+	//if !ok {
+	//	return fmt.Errorf("Error pulling manifest schema 1")
+	//}
+	//
+	//ic.ImageManifestSchema1 = schema1
+	//ic.ManifestDigest = digest
+	//
+	//manifest, digest, err = FetchImageManifest(ctx, ic.Options, 2, ic.progressOutput)
+	//if err == nil {
+	//	if schema2, ok := manifest.(*schema2.DeserializedManifest); ok {
+	//		ic.ImageManifestSchema2 = schema2
+	//
+	//		// Override the manifest digest as Docker uses schema 2, unless the image
+	//		// is pulled by digest since we only support pull-by-digest for schema 1.
+	//		// TODO(anchal): this check should be removed once issue #5187 is implemented.
+	//		if _, ok := ic.Reference.(reference.Canonical); !ok {
+	//			ic.ManifestDigest = digest
+	//		}
+	//	}
+	//}
+	//
+	//layers, err := ic.LayersToDownload()
+	//if err != nil {
+	//	return err
+	//}
+	//ic.ImageLayers = layers
+	//
+	//err = ldm.DownloadLayers(ctx, ic)
+	//if err != nil {
+	//	return err
+	//}
+
+	return fmt.Errorf("pushImage() is not implemented in imageC yet")
+}
+
 // PullImage pulls an image from docker hub
 func (ic *ImageC) PullImage() error {
 
