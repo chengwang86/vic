@@ -421,6 +421,8 @@ func (u *URLFetcher) setAuthToken(req *http.Request) {
 
 // ExtractOAuthURL extracts the OAuth url from the www-authenticate header
 func (u *URLFetcher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error) {
+
+	log.Infof("the hdr in ExtractAuthURL is: %s", hdr)
 	tokens := strings.Split(hdr, " ")
 	if len(tokens) != 2 || strings.ToLower(tokens[0]) != "bearer" {
 		err := fmt.Errorf("www-authenticate header is corrupted")
@@ -454,7 +456,9 @@ func (u *URLFetcher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL,
 		err := fmt.Errorf("missing scope in bearer auth challenge")
 		return nil, DoNotRetry{Err: err}
 	}
-
+    log.Infof("The service is: %s", service)
+	log.Infof("The realm is: %s", realm)
+	log.Infof("The scope is: %s", scope)
 	auth, err := url.Parse(realm)
 	if err != nil {
 		return nil, err

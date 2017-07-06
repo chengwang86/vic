@@ -18,7 +18,6 @@ import (
 	"archive/tar"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,8 +37,6 @@ import (
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/reference"
 	"github.com/docker/libtrust"
-
-	"bytes"
 
 	urlfetcher "github.com/vmware/vic/pkg/fetcher"
 	registryutils "github.com/vmware/vic/pkg/registry"
@@ -366,54 +363,54 @@ func FetchImageManifest(ctx context.Context, options Options, schemaVersion int,
 	return nil, "", fmt.Errorf("Unknown schema version %d requested!", schemaVersion)
 }
 
-// PutImageManifest simply pushes the manifest up to the registry.
-func PutImageManifest(ctx context.Context, manifest interface{}, ic Options, schemaVersion int, progressOutput progress.Output) error {
-	if schema2, ok := manifest.(*schema2.DeserializedManifest); !ok {
-	}
-
-	tr := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: options.InsecureSkipVerify,
-			RootCAs:            options.RootCAs,
-		},
-	}
-	client := &http.Client{Transport: tr}
-
-	// Create manifest push URL
-	url, err := url.Parse(options.Registry)
-	if err != nil {
-		return nil, "", err
-	}
-
-	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
-	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
-	log.Debugf("URL: %s", url)
-
-	// Add content type headers
-	reqHeaders := make(http.Header)
-	var dataReader io.ByteReader
-
-	switch schemaVersion {
-	case 1: //schema 1, signed manifest
-		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
-		dataReader := bytes.NewReader(option)
-	case 2: //schema 2
-		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
-	}
-
-	req, err := http.NewRequest(http.MethodPut, url, data)
-	if err != nil {
-		return err
-	}
-
-	_, err = client.Do(req)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
+//// PutImageManifest simply pushes the manifest up to the registry.
+//func PutImageManifest(ctx context.Context, manifest interface{}, ic Options, schemaVersion int, progressOutput progress.Output) error {
+//	if schema2, ok := manifest.(*schema2.DeserializedManifest); !ok {
+//	}
+//
+//	tr := &http.Transport{
+//		Proxy: http.ProxyFromEnvironment,
+//		TLSClientConfig: &tls.Config{
+//			InsecureSkipVerify: options.InsecureSkipVerify,
+//			RootCAs:            options.RootCAs,
+//		},
+//	}
+//	client := &http.Client{Transport: tr}
+//
+//	// Create manifest push URL
+//	url, err := url.Parse(options.Registry)
+//	if err != nil {
+//		return nil, "", err
+//	}
+//
+//	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
+//	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
+//	log.Debugf("URL: %s", url)
+//
+//	// Add content type headers
+//	reqHeaders := make(http.Header)
+//	var dataReader io.ByteReader
+//
+//	switch schemaVersion {
+//	case 1: //schema 1, signed manifest
+//		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
+//		dataReader := bytes.NewReader(option)
+//	case 2: //schema 2
+//		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
+//	}
+//
+//	req, err := http.NewRequest(http.MethodPut, url, data)
+//	if err != nil {
+//		return err
+//	}
+//
+//	_, err = client.Do(req)
+//	if err != nil {
+//		return err
+//	}
+//
+//	return nil
+//}
 
 // decodeManifestSchema1() reads a manifest schema 1 and creates an imageC
 // defined Manifest structure and returns the digest of the manifest as a string.
@@ -521,4 +518,136 @@ func getManifestDigest(content []byte, ref reference.Named) (string, error) {
 	// Correct Manifest Digest
 	log.Debugf("Manifest Digest: %v", digest)
 	return string(digest), nil
+}
+
+// PushImageBlob fetches the image blob
+// harcode layer diffID(digest) and layer tar using mock data
+//func PushImageBlob(ctx context.Context, options Options, image *ImageWithMeta, progressOutput progress.Output) error {
+func PushImageBlob(ctx context.Context, options Options, progressOutput progress.Output) (err error) {
+	defer trace.End(trace.Begin(options.Image))
+
+	// mimicking vanilla docker's push_v2.go:Upload()
+	// the workflow: (https://docs.docker.com/registry/spec/api/#pushing-an-image)
+	// 0) start an upload: POST /v2/<name>/blobs/uploads/; this will return the upload url in "location" of the response header
+	// 1) check if layer already exists: HEAD /v2/<name>/blobs/<digest>; if yes, complete upload by jumping to 3)
+	// 2) upload the layer tar (monolithic upload): PUT /v2/<name>/blobs/uploads/<uuid>?digest=<digest>; here the upload url is obtained in 0); layer binary will be in the request body
+	// 3) completed upload: PUT /v2/<name>/blob/uploads/<uuid>?digest=<digest> with 0-length body
+	// Cheng: I think the order of 0) and 1) could be changed so that we don't need 3) after 1)
+
+	// TODO: add retry logic; reuse pusher
+
+	log.Infof("The registry in use is: %s", options.Registry)
+	registryUrl, err := url.Parse(options.Registry)
+	if err != nil {
+		return err
+	}
+
+	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		Token:              options.Token,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+	})
+
+	//------------------step 1-----------------
+	// the layer tar might be passed into this function in the stream format instead of a stored variable
+	// here I just use local mock data
+	//layer := image.Layer.BlobSum
+	layer, err := ioutil.ReadFile("./busybox1/4669b4a8a33679a912d3ae167e12c0aaf5deafdaf8962c66d37b990782f5f990/layer.tar")
+	if err != nil {
+		return err
+	}
+
+	diffIDSum := sha256.New()
+	diffIDSum.Write([]byte(layer))
+	diffID := fmt.Sprintf("sha256:%x", diffIDSum.Sum(nil))
+	log.Infof("The calculated tar digest for the mock data is: %s", diffID)
+
+	// this is the diffID obtained by getImage(busybox) offline
+	diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
+	//diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033b"
+	exist, err := pusher.CheckLayerExistence(ctx, options.Image, diffID, registryUrl)
+	if err != nil {
+		return fmt.Errorf("failed to check layer existence: %s", err)
+	}
+	if exist {
+		// layer already exists; so no need to upload
+		return nil
+	}
+
+	//--------------------step 0---------------
+	// obtain upload url to start upload process
+	log.Infof("The registry url is: %s", registryUrl)
+	// TODO: instead of directly obtaining the upload url, we could try "Cross Repository Blob Mount"
+	// which would require obtaining a list of the repositories that the current user has access to.
+	// See https://docs.docker.com/registry/spec/api/#pushing-an-image
+	// vanilla docker does this as well
+	uploadURL, err := pusher.ObtainUploadUrl(ctx, registryUrl, options.Image)
+	if err != nil {
+		return err
+	}
+	log.Infof("The upload url is: %s", uploadURL)
+
+	defer func() {
+		if err != nil {
+			if err2 := pusher.CancelUpload(ctx, uploadURL, registryUrl); err2 != nil {
+				log.Errorf("failed during CancelUpload: %s", err2)
+			}
+		}
+		//----------------step 3---------------
+		//notify the registry to complete the upload process
+		if err1 := pusher.CompletedUpload(ctx, diffID, uploadURL, registryUrl); err1 != nil {
+			// TODO: either retry or cancel upload
+			log.Errorf("failed during CompletedUpload: %s", err1)
+			if err2 := pusher.CancelUpload(ctx, uploadURL, registryUrl); err2 != nil {
+				log.Errorf("failed during CancelUpload: %s", err2)
+			}
+		}
+	}()
+
+	//-----------------step 2------------------
+	if err = pusher.UploadLayer(ctx, diffID, uploadURL, registryUrl, layer); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func CrossRepoBlobMount(ctx context.Context, registry *url.URL, digest, image string, pusher *urlfetcher.URLPusher) (string, error) {
+	defer trace.End(trace.Begin(image))
+
+	// TODO: obtain a list of repositories that the user has access to
+	repoList := make([]string, 2)
+
+	log.Infof("The list of repositories is: %+v", repoList)
+
+	var (
+		mounted   bool
+		uploadUrl string
+		err       error
+	)
+
+	// if mount fails, the registry will fall back to the standard upload behavior
+	// and return a 202 Accepted with the upload URL in the Location header
+	for _, repo := range repoList {
+		mounted, uploadUrl, err = pusher.MountBlobToRepo(ctx, registry, digest, image, repo)
+		if err != nil {
+			return "", err
+		}
+		if mounted {
+			break
+		}
+	}
+
+	if mounted {
+		return "", nil
+	}
+
+	if uploadUrl == "" {
+		return "", fmt.Errorf("failed to obtain uploadUrl by CrossRepoBlobMount")
+	}
+
+	return uploadUrl, nil
 }

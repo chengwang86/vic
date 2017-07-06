@@ -455,7 +455,7 @@ func (ic *ImageC) PullImage() error {
 
 	// Output message
 	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
-	progress.Message(ic.progressOutput, "", tagOrDigest+": Pulling from "+ic.Image)
+	progress.Message(ic.progressOutput, "", tagOrDigest+": Pushing "+ic.Image)
 
 	// Pull the image manifest
 	if err := ic.pullManifest(ctx); err != nil {
@@ -487,20 +487,25 @@ func (ic *ImageC) PushImage() error {
 		return err
 	}
 
-	// Output message
-	tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
-	progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
+	//// Output message
+	//tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
+	//progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
+	//
+	//// Create Image and manifest
+	//
+	//// Upload all the layers
+	//var lum LayerUploader
+	//if err := lum.UploadLayers(ctx, ic); err != nil {
+	//	return err
+	//}
+	//
+	//// Push up the image manifest
+	//if err := ic.pushManifest(ctx); err != nil {
+	//	return err
+	//}
 
-	// Create Image and manifest
-
-	// Upload all the layers
-	var lum LayerUploader
-	if err := lum.UploadLayers(ctx, ic); err != nil {
-		return err
-	}
-
-	// Push up the image manifest
-	if err := ic.pushManifest(ctx); err != nil {
+	err := PushImageBlob(ctx, ic.Options, ic.progressOutput)
+	if err != nil {
 		return err
 	}
 
@@ -546,7 +551,7 @@ func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 	// Calculate (and overwrite) the registry URL and make sure that it responds to requests
 	ic.Registry, err = LearnRegistryURL(&ic.Options)
 	if err != nil {
-		log.Errorf("Error while pulling image: %s", err)
+		log.Errorf("Error while learning registry url: %s", err)
 		return err
 	}
 
@@ -561,6 +566,8 @@ func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 			return fmt.Errorf("Failed to obtain OAuth endpoint: %s", err)
 		}
 	}
+
+	log.Infof("The url after LearnAuthURL is: %+v", url)
 
 	// Get the OAuth token - if only we have a URL
 	if url != nil {
@@ -617,18 +624,18 @@ func (ic *ImageC) pullManifest(ctx context.Context) error {
 	return nil
 }
 
-func (ic *ImageC) pushManifest(ctx context.Context) error {
-	if ic.ImageManifestSchema2 != nil {
-		if err := PushImageManifest(ctx, ic.ImageManifestSchema2, ic.Options, 2, ic.progressOutput, ic.progressOutput); err != nil {
-			return err
-		}
-	} else if ic.ImageManifestSchema1 != nil {
-		if err := PushImageManifest(ctx, ic.ImageManifestSchema1, ic.Options, 1, ic.progressOutput, ic.progressOutput); err != nil {
-			return err
-		}
-	} else {
-		return fmt.Errorf("attempt to push manifest when non exist")
-	}
-
-	return nil
-}
+//func (ic *ImageC) pushManifest(ctx context.Context) error {
+//	if ic.ImageManifestSchema2 != nil {
+//		if err := PushImageManifest(ctx, ic.ImageManifestSchema2, ic.Options, 2, ic.progressOutput, ic.progressOutput); err != nil {
+//			return err
+//		}
+//	} else if ic.ImageManifestSchema1 != nil {
+//		if err := PushImageManifest(ctx, ic.ImageManifestSchema1, ic.Options, 1, ic.progressOutput, ic.progressOutput); err != nil {
+//			return err
+//		}
+//	} else {
+//		return fmt.Errorf("attempt to push manifest when non exist")
+//	}
+//
+//	return nil
+//}

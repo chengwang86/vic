@@ -14,142 +14,153 @@
 
 package imagec
 
-import (
-	"context"
-
-	"github.com/moby/moby/pkg/progress"
-	"github.com/vmware/vic/pkg/trace"
-)
-
-type uploadTransfer struct {
-}
-
-// LayerUploader uploads layers
-type LayerUploader struct {
-	tm TransferManager
-}
-
-const (
-	maxUploadAttempts    = 5
-	maxConcurrentUploads = 3
-)
-
-// NewLayerUploader creates a new LayerUploader
-func NewLayerUploader() *LayerUploader {
-	return &LayerUploader{
-		tm: NewTransferManager(maxConcurrentUploads),
-	}
-}
-
-// UploadLayers starts the upload of all layers contained in the ImageC argument
-func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
-	defer trace.End(trace.Begin(""))
-
-	var (
-		uploads      []*uploadTransfer
-		currTransfer = make(map[string]*uploadTransfer)
-	)
-
-	for _, layer := range ic.ImageLayers {
-		progress.Update(progressOutput, descriptor.ID(), "Preparing")
-
-		if _, present := currTransfer[layer.ID]; present {
-			continue
-		}
-
-		layerConfig, err := LayerCache().Get(layer.ID)
-		if err != nil {
-			return err
-		}
-
-		xferFunc := lum.makeUploadFunc(layer)
-		upload, watcher := lum.tm.Transfer(descriptor.Key(), xferFunc, progressOutput)
-		defer upload.Release(watcher)
-		uploads = append(uploads, upload.(*uploadTransfer))
-		dedupDescriptors[key] = upload.(*uploadTransfer)
-
-	}
-
-
-	for _, upload := range uploads {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-upload.Transfer.Done():
-			if upload.err != nil {
-				return upload.err
-			}
-		}
-	return nil
-}
-
-func (lum *LayerUploader) makeUploadFunc(descriptor UploadDescriptor) DoFunc {
-	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
-		u := &uploadTransfer{
-			Transfer: NewTransfer(),
-		}
-
-		go func() {
-			defer func() {
-				close(progressChan)
-			}()
-
-			progressOutput := progress.ChanOutput(progressChan)
-
-			select {
-			case <-start:
-			default:
-				progress.Update(progressOutput, descriptor.ID(), "Waiting")
-				<-start
-			}
-
-			retries := 0
-			for {
-				remoteDescriptor, err := descriptor.Upload(u.Transfer.Context(), progressOutput)
-				if err == nil {
-					u.remoteDescriptor = remoteDescriptor
-					break
-				}
-
-				// If an error was returned because the context
-				// was cancelled, we shouldn't retry.
-				select {
-				case <-u.Transfer.Context().Done():
-					u.err = err
-					return
-				default:
-				}
-
-				retries++
-				if _, isDNR := err.(DoNotRetry); isDNR || retries == maxUploadAttempts {
-					logrus.Errorf("Upload failed: %v", err)
-					u.err = err
-					return
-				}
-
-				logrus.Errorf("Upload failed, retrying: %v", err)
-				delay := retries * 5
-				ticker := time.NewTicker(time.Second)
-
-			selectLoop:
-				for {
-					progress.Updatef(progressOutput, descriptor.ID(), "Retrying in %d second%s", delay, (map[bool]string{true: "s"})[delay != 1])
-					select {
-					case <-ticker.C:
-						delay--
-						if delay == 0 {
-							ticker.Stop()
-							break selectLoop
-						}
-					case <-u.Transfer.Context().Done():
-						ticker.Stop()
-						u.err = errors.New("upload cancelled during retry delay")
-						return
-					}
-				}
-			}
-		}()
-
-		return u
-	}
-}
+//import (
+//	"context"
+//
+//	"github.com/vmware/vic/lib/apiservers/engine/backends/cache"
+//	"github.com/docker/docker/distribution/xfer"
+//	"github.com/docker/docker/pkg/progress"
+//	"github.com/vmware/vic/pkg/trace"
+//	"github.com/Sirupsen/logrus"
+//	"github.com/docker/docker/pkg/streamformatter"
+//)
+//
+//type uploadTransfer struct {
+//}
+//
+//// LayerUploader uploads layers
+//type LayerUploader struct {
+//	tm xfer.TransferManager
+//}
+//
+//const (
+//	maxUploadAttempts    = 5
+//	maxConcurrentUploads = 3
+//)
+//
+//// NewLayerUploader creates a new LayerUploader
+//func NewLayerUploader() *LayerUploader {
+//	return &LayerUploader{
+//		tm: xfer.NewTransferManager(maxConcurrentUploads),
+//	}
+//}
+//
+//// UploadLayers starts the upload of all layers contained in the ImageC argument
+//func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
+//	defer trace.End(trace.Begin(""))
+//
+//	var (
+//		uploads      []*uploadTransfer
+//		currTransfer = make(map[string]*uploadTransfer)
+//		dedupDescriptors = make(map[string]*uploadTransfer)
+//		sf             = streamformatter.NewJSONStreamFormatter()
+//		progressOutput = &serialProgressOutput{
+//			c:   make(chan prog, 100),
+//			out: sf.NewProgressOutput(ic.Outstream, false),
+//		}
+//	)
+//
+//	for _, layer := range ic.ImageLayers {
+//		progress.Update(progressOutput, layer.ID, "Preparing")
+//
+//		if _, present := currTransfer[layer.ID]; present {
+//			continue
+//		}
+//
+//		layerConfig, err := LayerCache().Get(layer.ID)
+//		if err != nil {
+//			return err
+//		}
+//
+//		xferFunc := lum.makeUploadFunc(layer)
+//		upload, watcher := lum.tm.Transfer(layer.Key(), xferFunc, progressOutput)
+//		defer upload.Release(watcher)
+//		uploads = append(uploads, upload.(*uploadTransfer))
+//		dedupDescriptors[key] = upload.(*uploadTransfer)
+//
+//	}
+//
+//
+//	for _, upload := range uploads {
+//		select {
+//		case <-ctx.Done():
+//			return ctx.Err()
+//		case <-upload.Transfer.Done():
+//			if upload.err != nil {
+//				return upload.err
+//			}
+//		}
+//	return nil
+//}
+//
+//func (lum *LayerUploader) makeUploadFunc(descriptor xfer.UploadDescriptor) DoFunc {
+//	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
+//		u := &uploadTransfer{
+//			Transfer: NewTransfer(),
+//		}
+//
+//		go func() {
+//			defer func() {
+//				close(progressChan)
+//			}()
+//
+//			progressOutput := progress.ChanOutput(progressChan)
+//
+//			select {
+//			case <-start:
+//			default:
+//				progress.Update(progressOutput, descriptor.ID(), "Waiting")
+//				<-start
+//			}
+//
+//			retries := 0
+//			for {
+//				//remoteDescriptor, err := descriptor.Upload(u.Transfer.Context(), progressOutput)
+//				PushImageBlob(ctx, ic.Options, image, progressOutput)
+//				if err == nil {
+//					u.remoteDescriptor = remoteDescriptor
+//					break
+//				}
+//
+//				// If an error was returned because the context
+//				// was cancelled, we shouldn't retry.
+//				select {
+//				case <-u.Transfer.Context().Done():
+//					u.err = err
+//					return
+//				default:
+//				}
+//
+//				retries++
+//				if _, isDNR := err.(DoNotRetry); isDNR || retries == maxUploadAttempts {
+//					logrus.Errorf("Upload failed: %v", err)
+//					u.err = err
+//					return
+//				}
+//
+//				logrus.Errorf("Upload failed, retrying: %v", err)
+//				delay := retries * 5
+//				ticker := time.NewTicker(time.Second)
+//
+//			selectLoop:
+//				for {
+//					progress.Updatef(progressOutput, descriptor.ID(), "Retrying in %d second%s", delay, (map[bool]string{true: "s"})[delay != 1])
+//					select {
+//					case <-ticker.C:
+//						delay--
+//						if delay == 0 {
+//							ticker.Stop()
+//							break selectLoop
+//						}
+//					case <-u.Transfer.Context().Done():
+//						ticker.Stop()
+//						u.err = errors.New("upload cancelled during retry delay")
+//						return
+//					}
+//				}
+//			}
+//		}()
+//
+//		return u
+//	}
+//}
