@@ -555,7 +555,18 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	// the layer tar might be passed into this function in the stream format instead of a stored variable
 	// here I just use local mock data
 	//layer := image.Layer.BlobSum
-	layer, err := ioutil.ReadFile("./busybox1/4669b4a8a33679a912d3ae167e12c0aaf5deafdaf8962c66d37b990782f5f990/layer.tar")
+	//layer, err := ioutil.ReadFile("/home/cheng/go/src/github.com/vmware/vic/busybox1/4669b4a8a33679a912d3ae167e12c0aaf5deafdaf8962c66d37b990782f5f990/layer.tar")
+	//if err != nil {
+	//	return err
+	//}
+	bigBuff := make([]byte, 1024000)
+	err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
+	if err != nil {
+		return err
+	}
+	defer os.Remove("layer.tar")
+
+	layer, err := ioutil.ReadFile("layer.tar")
 	if err != nil {
 		return err
 	}
@@ -574,6 +585,8 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	}
 	if exist {
 		// layer already exists; so no need to upload
+		layerID := "layerID"
+		progress.Update(progressOutput, layerID, "Layer already exists")
 		return nil
 	}
 
