@@ -45,11 +45,12 @@ type Pusher interface {
 	IsStatusNotFound() bool
 	IsStatusAccepted() bool
 	IsStatusCreated() bool
-	Status() int
+	IsStatusNoContent() bool
 
-	CompletedUpload(ctx context.Context, digest, uploadUrl string, registry *url.URL) error
-	UploadLayer(ctx context.Context, digest, uploadUrl string, registry *url.URL, layer []byte) error
-	CancelUpload(ctx context.Context, uploadUrl string, registry *url.URL) error
+	ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error)
+	CompletedUpload(ctx context.Context, digest, uploadUrl string) error
+	UploadLayer(ctx context.Context, digest, uploadUrl string, layer []byte) error
+	CancelUpload(ctx context.Context, uploadUrl string) error
 	ObtainUploadUrl(ctx context.Context, registry *url.URL, image string) (string, error)
 	CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL) (bool, error)
 	MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string) (bool, string, error)
@@ -116,26 +117,24 @@ func (u *URLPusher) Push(ctx context.Context, url *url.URL, body io.Reader, reqH
 
 	defer res.Body.Close()
 
+	log.Debugf("URLPusher.push() - statuscode: %d, body: %#v, header: %#v", res.StatusCode, res.Body, res.Header)
+
 	u.StatusCode = res.StatusCode
 
 	if u.options.Token == nil && u.IsStatusUnauthorized() {
+		// this is the case when fetching the auth token
 		hdr := res.Header.Get("www-authenticate")
 		if hdr == "" {
 			return nil, fmt.Errorf("www-authenticate header is missing")
 		}
-		u.OAuthEndpoint, err = u.ExtractOAuthURL(hdr, url)
-		if err != nil {
-			return nil, err
-		}
-		return nil, DoNotRetry{Err: fmt.Errorf("Authentication required")}
+		return res.Header, nil
 	}
 
 	if u.IsStatusUnauthorized() {
 		hdr := res.Header.Get("www-authenticate")
-		return nil, fmt.Errorf("unauthorized due to %s", hdr)
+		return nil, fmt.Errorf("unauthorized: %s", hdr)
 	}
 
-	log.Debugf("URLPusher.push() - body: %#v, header: %#v", res.Body, res.Header)
 	return res.Header, nil
 }
 
@@ -162,9 +161,13 @@ func (u *URLPusher) IsStatusCreated() bool {
 	return u.StatusCode == http.StatusCreated
 }
 
-func (u *URLPusher) Status() int {
-	return u.StatusCode
+func (u *URLPusher) IsStatusNoContent() bool {
+	return u.StatusCode == http.StatusNoContent
 }
+
+//func (u *URLPusher) Status() int {
+//	return u.StatusCode
+//}
 
 func (u *URLPusher) setUserAgent(req *http.Request) {
 	log.Debugf("Setting user-agent to vic/%s", version.Version)
@@ -193,6 +196,9 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 		err := fmt.Errorf("www-authenticate header is corrupted")
 		return nil, DoNotRetry{Err: err}
 	}
+	// example for tokens[1]:
+	// realm=\"https://kang.eng.vmware.com/service/token\",service=\"harbor-registry\",scope=\"repository:cheng-test/busybox:pull,push\"
+	// if we use ',' as the separator, the last 'push' will be missing; but so far it works well without the last "push" in "scope"
 	tokens = strings.Split(tokens[1], ",")
 
 	var realm, service, scope string
@@ -205,6 +211,8 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 		}
 		if strings.HasPrefix(token, "scope") {
 			scope = strings.Trim(token[len("scope="):], "\"")
+			//scope += ","
+			//scope += tokens[len(tokens)-1]
 		}
 	}
 
@@ -221,9 +229,9 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 		err := fmt.Errorf("missing scope in bearer auth challenge")
 		return nil, DoNotRetry{Err: err}
 	}
-	log.Infof("The service is: %s", service)
-	log.Infof("The realm is: %s", realm)
-	log.Infof("The scope is: %s", scope)
+	log.Debugf("The service is: %s", service)
+	log.Debugf("The realm is: %s", realm)
+	log.Debugf("The scope is: %s", scope)
 	auth, err := url.Parse(realm)
 	if err != nil {
 		return nil, err
@@ -242,85 +250,86 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 // upload the layer (monolithic upload)
 // PUT /v2/<name>/blobs/uploads/<uuid>?digest=<digest>; this uuid is from the `location` header
 // in the response of the first step if successful
-func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl string, registry *url.URL, layer []byte) error {
+func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl string, layer []byte) error {
 	defer trace.End(trace.Begin(uploadUrl))
 
-	composedUrl := urlDeepCopy(registry)
 	uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
-	composedUrl.Path = path.Join(registry.Path, uploadUrl)
+	composedUrl, err := url.Parse(uploadUrl)
+	if err != nil {
+		return fmt.Errorf("failed to parse uploadUrl: %s", err)
+	}
 
-	log.Infof("The url for UploadLayer is: %s\n ", composedUrl)
+	log.Infof("The url for UploadLayer is: %s", composedUrl)
 
 	reqHdrs := &http.Header{
 		"Content-Length": {strconv.Itoa(len(layer))},
 		"Content-Type":   {"application/octet-stream"},
 	}
 
-	hdr, err := u.Push(ctx, composedUrl, bytes.NewReader(layer), reqHdrs, "PUT")
+	_, err = u.Push(ctx, composedUrl, bytes.NewReader(layer), reqHdrs, "PUT")
 	if err != nil {
 		return fmt.Errorf("failed to upload layer: %s", err)
 	}
 
-	log.Infof("UploadLayer res.Header: %+v", hdr)
-
-	if u.IsStatusAccepted() {
-		log.Infof("The upload layer finishes successfully")
+	if u.IsStatusCreated() {
+		log.Infof("The uploadLayer finished successfully")
 		return nil
 	}
 
-	return fmt.Errorf("unexpected http code during UploadLayer: %d, URL: %s", u.Status(), composedUrl)
+	return fmt.Errorf("unexpected http code during UploadLayer: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
 // DELETE /v2/<name>/blobs/uploads/<uuid>
-func (u *URLPusher) CancelUpload(ctx context.Context, uploadUrl string, registry *url.URL) error {
+func (u *URLPusher) CancelUpload(ctx context.Context, uploadUrl string) error {
 	defer trace.End(trace.Begin(uploadUrl))
 
-	composedUrl := urlDeepCopy(registry)
-	composedUrl.Path = path.Join(registry.Path, uploadUrl)
+	composedUrl, err := url.Parse(uploadUrl)
+	if err != nil {
+		return fmt.Errorf("failed to parse uploadUrl: %s", err)
+	}
 
-	log.Infof("The url for CancelUpload is: %s\n ", composedUrl)
+	log.Debugf("The url for CancelUpload is: %s\n ", composedUrl)
 
-	hdr, err := u.Push(ctx, composedUrl, nil, nil, "DELETE")
+	_, err = u.Push(ctx, composedUrl, nil, nil, "DELETE")
 	if err != nil {
 		return fmt.Errorf("failed to cancel upload: %s", err)
 	}
 
-	log.Infof("CancelUpload res.Header: %+v", hdr)
-
-	if u.IsStatusOK() {
+	if u.IsStatusNoContent() {
 		log.Infof("The upload process is cancelled successfully")
 		return nil
 	}
 
-	return fmt.Errorf("unexpected http code during CancelUpload: %d, URL: %s", u.Status(), composedUrl)
+	return fmt.Errorf("unexpected http code during CancelUpload: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
-func (u *URLPusher) CompletedUpload(ctx context.Context, digest, uploadUrl string, registry *url.URL) error {
+func (u *URLPusher) CompletedUpload(ctx context.Context, digest, uploadUrl string) error {
 	defer trace.End(trace.Begin(uploadUrl))
 	// PUT /v2/<name>/blob/uploads/<uuid>?digest=<digest>
 	// From docker's documentation: if all chunks have already been uploaded,
 	// a PUT request with a digest parameter and zero-length body
 	// may be sent to complete and validated the upload.
 
-	composedUrl := urlDeepCopy(registry)
 	uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
-	composedUrl.Path = path.Join(registry.Path, uploadUrl)
+	composedUrl, err := url.Parse(uploadUrl)
 
-	log.Infof("The url for CompletedUpload is: %s\n ", composedUrl)
+	log.Debugf("The url for CompletedUpload is: %s", composedUrl)
 
-	hdr, err := u.Push(ctx, composedUrl, nil, nil, "PUT")
+	reqHdrs := &http.Header{
+		"Content-Length": {"0"},
+		"Content-Type":   {"application/octet-stream"},
+	}
+	_, err = u.Push(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, "PUT")
 	if err != nil {
 		return fmt.Errorf("failed to complete upload: %s", err)
 	}
 
-	log.Infof("CompletedUpload res.Header: %+v", hdr)
-
-	if u.IsStatusCreated() {
+	if u.IsStatusNoContent() {
 		log.Infof("The upload process completed successfully")
 		return nil
 	}
 
-	return fmt.Errorf("unexpected http code during CompletedUpload: %d, URL: %s", u.Status(), composedUrl)
+	return fmt.Errorf("unexpected http code during CompletedUpload: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
 // HEAD /v2/<name>/blobs/<digest>
@@ -330,15 +339,11 @@ func (u *URLPusher) CheckLayerExistence(ctx context.Context, image, digest strin
 	composedUrl := urlDeepCopy(registry)
 	composedUrl.Path = path.Join(registry.Path, image, "blobs", digest)
 
-	log.Infof("The url for checking layer existence is: %s\n ", composedUrl)
+	log.Debugf("The url for checking layer existence is: %s", composedUrl)
 
-	hdr, err := u.Push(ctx, composedUrl, nil, nil, "HEAD")
+	_, err := u.Push(ctx, composedUrl, nil, nil, "HEAD")
 	if err != nil {
 		return false, fmt.Errorf("failed to check layer existence: %s", err)
-	}
-
-	if u.IsStatusUnauthorized() {
-		return false, fmt.Errorf("unauthorized during CheckLayerExistence: %s", hdr.Get("www-authenticate"))
 	}
 
 	if u.IsStatusOK() {
@@ -350,7 +355,7 @@ func (u *URLPusher) CheckLayerExistence(ctx context.Context, image, digest strin
 		log.Infof("The layer does not exist")
 		return false, nil
 	}
-	return false, fmt.Errorf("unexpected http code during CheckLayerExistence: %d, URL: %s", u.Status(), composedUrl)
+	return false, fmt.Errorf("unexpected http code during CheckLayerExistence: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
 // obtain the upload url
@@ -359,26 +364,24 @@ func (u *URLPusher) ObtainUploadUrl(ctx context.Context, registry *url.URL, imag
 	defer trace.End(trace.Begin(image))
 
 	composedUrl := urlDeepCopy(registry)
-	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads")
+	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads/")
+	composedUrl.Path += "/"
 
-	log.Infof("The url for ObtainUploadUrl is: %s\n ", composedUrl)
+	log.Debugf("The url for ObtainUploadUrl is: %s", composedUrl)
 
-	// obtain the upload url
-	// POST /v2/<name>/blobs/uploads
 	hdr, err := u.Push(ctx, composedUrl, nil, nil, "POST")
+
 	if err != nil {
 		return "", err
 	}
 
-	log.Infof("ObtainUploadURL res.Header: %+v", hdr)
-
-	// TODO: what if the image does not exist in the registry previously? Will the POST request return 404 Not Found?
+	// even if the image does not exist (push a new image), we should still be able to get a location for upload
 	if u.IsStatusAccepted() {
-		log.Infof("The location is: %s", hdr.Get("Location"))
-		return hdr.Get("Location:"), nil
+		log.Debugf("The location is: %s", hdr.Get("Location"))
+		return hdr.Get("Location"), nil
 	}
 
-	return "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.Status(), composedUrl)
+	return "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
 func (u *URLPusher) MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string) (bool, string, error) {
@@ -414,7 +417,7 @@ func (u *URLPusher) MountBlobToRepo(ctx context.Context, registry *url.URL, dige
 		return false, hdr.Get("Location:"), nil
 	}
 
-	return false, "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.Status(), composedUrl)
+	return false, "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
 func urlDeepCopy(src *url.URL) *url.URL {

@@ -482,10 +482,65 @@ func (ic *ImageC) PushImage() error {
 	ctx, cancel := context.WithTimeout(ctx, ic.Options.Timeout)
 	defer cancel()
 
-	// Authenticate, get URL, get token
-	if err := ic.prepareTransfer(ctx); err != nil {
+	// Parse the -reference parameter
+	ic.ParseReference()
+
+	// Host is either the host's UUID (if run on vsphere) or the hostname of
+	// the system (if run standalone)
+	host, err := sys.UUID()
+	if err != nil {
+		log.Errorf("Failed to return host name: %s", err)
 		return err
 	}
+
+	if host != "" {
+		log.Infof("Using UUID (%s) for imagestore name", host)
+	} else if ic.Standalone {
+		host, err = os.Hostname()
+		log.Infof("Using host (%s) for imagestore name", host)
+	}
+
+	ic.Storename = host
+
+	if !ic.Standalone {
+		log.Debugf("Running with portlayer")
+
+		// Ping the server to ensure it's at least running
+		ok, err := PingPortLayer(ic.Host)
+		if err != nil || !ok {
+			log.Errorf("Failed to ping portlayer: %s", err)
+			return err
+		}
+	} else {
+		log.Debugf("Running standalone")
+	}
+
+	// Calculate (and overwrite) the registry URL and make sure that it responds to requests
+	ic.Registry, err = LearnRegistryURL(&ic.Options)
+	if err != nil {
+		log.Errorf("Error while learning registry url: %s", err)
+		return err
+	}
+
+	// Get the URL of the OAuth endpoint
+	url, err := LearnAuthURLForPush(ic.Options)
+	if err != nil {
+		log.Infof(err.Error())
+		return fmt.Errorf("Failed to obtain OAuth endpoint: %s", err)
+	}
+
+	log.Infof("The url after LearnAuthURL is: %+v", url)
+
+	// Get the OAuth token - if only we have a URL
+	if url != nil {
+		token, err := FetchToken(ctx, ic.Options, url, ic.progressOutput)
+		if err != nil {
+			log.Errorf("Failed to fetch OAuth token: %s", err)
+			return err
+		}
+		ic.Token = token
+	}
+
 
 	//// Output message
 	//tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
@@ -504,7 +559,7 @@ func (ic *ImageC) PushImage() error {
 	//	return err
 	//}
 
-	err := PushImageBlob(ctx, ic.Options, ic.progressOutput)
+	err = PushImageBlob(ctx, ic.Options, ic.progressOutput)
 	if err != nil {
 		return err
 	}

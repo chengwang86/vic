@@ -38,6 +38,8 @@ import (
 	"github.com/docker/docker/reference"
 	"github.com/docker/libtrust"
 
+	"bytes"
+
 	urlfetcher "github.com/vmware/vic/pkg/fetcher"
 	registryutils "github.com/vmware/vic/pkg/registry"
 	"github.com/vmware/vic/pkg/trace"
@@ -534,13 +536,15 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	// 3) completed upload: PUT /v2/<name>/blob/uploads/<uuid>?digest=<digest> with 0-length body
 	// Cheng: I think the order of 0) and 1) could be changed so that we don't need 3) after 1)
 
-	// TODO: add retry logic; reuse pusher
+	// TODO: add retry logic; or maybe put the retry logic in upload manager
 
-	log.Infof("The registry in use is: %s", options.Registry)
+	log.Debugf("The registry in use is: %s", options.Registry)
 	registryUrl, err := url.Parse(options.Registry)
 	if err != nil {
 		return err
 	}
+
+	log.Debugf("The token is: %s", options.Token.Token)
 
 	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
 		Timeout:            options.Timeout,
@@ -553,20 +557,16 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 
 	//------------------step 1-----------------
 	// the layer tar might be passed into this function in the stream format instead of a stored variable
-	// here I just use local mock data
-	//layer := image.Layer.BlobSum
-	//layer, err := ioutil.ReadFile("/home/cheng/go/src/github.com/vmware/vic/busybox1/4669b4a8a33679a912d3ae167e12c0aaf5deafdaf8962c66d37b990782f5f990/layer.tar")
+	// here I just use mock data
+	//bigBuff := make([]byte, 1024000)
+	//err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
 	//if err != nil {
 	//	return err
 	//}
-	bigBuff := make([]byte, 1024000)
-	err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
-	if err != nil {
-		return err
-	}
-	defer os.Remove("layer.tar")
-
-	layer, err := ioutil.ReadFile("layer.tar")
+	//defer os.Remove("layer.tar")
+	//
+	//layer, err := ioutil.ReadFile("layer.tar")
+	layer, err := ioutil.ReadFile("/home/cheng/layer.tar.gz")
 	if err != nil {
 		return err
 	}
@@ -577,8 +577,9 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	log.Infof("The calculated tar digest for the mock data is: %s", diffID)
 
 	// this is the diffID obtained by getImage(busybox) offline
-	diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
+	//diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
 	//diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033b"
+
 	exist, err := pusher.CheckLayerExistence(ctx, options.Image, diffID, registryUrl)
 	if err != nil {
 		return fmt.Errorf("failed to check layer existence: %s", err)
@@ -592,11 +593,11 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 
 	//--------------------step 0---------------
 	// obtain upload url to start upload process
-	log.Infof("The registry url is: %s", registryUrl)
-	// TODO: instead of directly obtaining the upload url, we could try "Cross Repository Blob Mount"
 	// which would require obtaining a list of the repositories that the current user has access to.
 	// See https://docs.docker.com/registry/spec/api/#pushing-an-image
 	// vanilla docker does this as well
+	// TODO: instead of directly obtaining the upload url, we could try "Cross Repository Blob Mount"
+
 	uploadURL, err := pusher.ObtainUploadUrl(ctx, registryUrl, options.Image)
 	if err != nil {
 		return err
@@ -605,23 +606,24 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 
 	defer func() {
 		if err != nil {
-			if err2 := pusher.CancelUpload(ctx, uploadURL, registryUrl); err2 != nil {
-				log.Errorf("failed during CancelUpload: %s", err2)
+			if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
+				log.Errorf("Failed during CancelUpload: %s", err2)
 			}
-		}
-		//----------------step 3---------------
-		//notify the registry to complete the upload process
-		if err1 := pusher.CompletedUpload(ctx, diffID, uploadURL, registryUrl); err1 != nil {
-			// TODO: either retry or cancel upload
-			log.Errorf("failed during CompletedUpload: %s", err1)
-			if err2 := pusher.CancelUpload(ctx, uploadURL, registryUrl); err2 != nil {
-				log.Errorf("failed during CancelUpload: %s", err2)
+		} else {
+			//----------------step 3---------------
+			//notify the registry to complete the upload process
+			if err1 := pusher.CompletedUpload(ctx, diffID, uploadURL); err1 != nil {
+				// TODO: either retry or cancel upload
+				log.Errorf("failed during CompletedUpload: %s", err1)
+				if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
+					log.Errorf("failed during CancelUpload: %s", err2)
+				}
 			}
 		}
 	}()
 
 	//-----------------step 2------------------
-	if err = pusher.UploadLayer(ctx, diffID, uploadURL, registryUrl, layer); err != nil {
+	if err = pusher.UploadLayer(ctx, diffID, uploadURL, layer); err != nil {
 		return err
 	}
 
@@ -663,4 +665,41 @@ func CrossRepoBlobMount(ctx context.Context, registry *url.URL, digest, image st
 	}
 
 	return uploadUrl, nil
+}
+
+// LearnAuthURLForPush returns the URL of the OAuth endpoint
+func LearnAuthURLForPush(options Options) (*url.URL, error) {
+	defer trace.End(trace.Begin(options.Reference.String()))
+
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return nil, err
+	}
+
+	url.Path = path.Join(url.Path, options.Image, "blobs", "uploads")
+	url.Path += "/"
+	log.Debugf("LearnAuthURLForPush URL: %s", url)
+
+	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+	})
+
+	// We expect docker registry to return a 401 to us - with a WWW-Authenticate header
+	// We parse that header and learn the OAuth endpoint to fetch OAuth token.
+	hdr, err := pusher.Push(ctx, url, bytes.NewReader([]byte(" ")), nil, "POST")
+	//hdresponse, err := ctxhttp.Post(ctx, pusher.Client(), url.String(), "application/octet-stream", b)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err == nil && pusher.IsStatusUnauthorized() {
+		return pusher.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
+	}
+
+	return nil, fmt.Errorf("%s returned an unexpected response: %s", url, err)
 }
