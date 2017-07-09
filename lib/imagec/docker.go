@@ -591,19 +591,6 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 		return nil
 	}
 
-	//--------------------step 0---------------
-	// obtain upload url to start upload process
-	// which would require obtaining a list of the repositories that the current user has access to.
-	// See https://docs.docker.com/registry/spec/api/#pushing-an-image
-	// vanilla docker does this as well
-	// TODO: instead of directly obtaining the upload url, we could try "Cross Repository Blob Mount"
-
-	uploadURL, err := pusher.ObtainUploadUrl(ctx, registryUrl, options.Image)
-	if err != nil {
-		return err
-	}
-	log.Infof("The upload url is: %s", uploadURL)
-
 	/////////////////////////////////////////////
 	// obtain a list of repositories
 	res, err := ObtainRepoList(options, progressOutput)
@@ -613,6 +600,19 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 		log.Infof("The repo list is: %s", res)
 	}
 	////////////////////////////////////////////
+
+	//--------------------step 0---------------
+	// obtain upload url to start upload process
+	// which would require obtaining a list of the repositories that the current user has access to.
+	// See https://docs.docker.com/registry/spec/api/#pushing-an-image
+	// vanilla docker does this as well
+	// TODO: instead of directly obtaining the upload url, we could try "Cross Repository Blob Mount"
+
+	//uploadURL, err := pusher.ObtainUploadUrl(ctx, registryUrl, options.Image)
+	//if err != nil {
+	//	return err
+	//}
+	//log.Infof("The upload url is: %s", uploadURL)
 
 	//defer func() {
 	//	if err != nil {
@@ -710,7 +710,7 @@ func LearnAuthURLForPush(options Options) (*url.URL, error) {
 		return pusher.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
 	}
 
-	return nil, fmt.Errorf("%s returned an unexpected response: %s", url, err)
+	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", pusher.Status(), url)
 }
 
 // ObtainRepoList
@@ -739,7 +739,7 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 	url.Path = path.Join(url.Path, "_catalog")
 	log.Debugf("obtainRepolist URL: %s", url)
 
-	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
+	fetcher := urlfetcher.NewURLFetcher(urlfetcher.Options{
 		Timeout:            options.Timeout,
 		Username:           options.Username,
 		Password:           options.Password,
@@ -750,14 +750,14 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 
 	// We expect docker registry to return a 401 to us if token is nil - with a WWW-Authenticate header
 	// We parse that header and learn the OAuth endpoint to fetch OAuth token.
-	hdr, err := pusher.Push(ctx, url, nil, nil, "GET")
-
+	rdr, hdr, err := fetcher.FetchWithHeaderAndBody(ctx, url, nil)
 	if err != nil {
 		return "", nil, err
 	}
+	defer rdr.Close()
 
-	if err == nil && pusher.IsStatusUnauthorized() {
-		oauthUrl, err := pusher.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
+	if err == nil && fetcher.IsStatusUnauthorized() {
+		oauthUrl, err := fetcher.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to extact oauth url: %s", err)
 		}
@@ -769,8 +769,17 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 		return "", token, nil
 	}
 
-	if pusher.IsStatusOK() {
-		return
+	if fetcher.IsStatusOK() {
+		out := bytes.NewBuffer(nil)
 
+		// Stream into it
+		_, err = io.Copy(out, rdr)
+		if err != nil {
+			// cleanup
+			return "", nil, err
+		}
+		return string(out.Bytes()), nil, nil
 	}
+
+	return "", nil, fmt.Errorf("Unexpected http code: %d, URL: %s", fetcher.Status(), url)
 }

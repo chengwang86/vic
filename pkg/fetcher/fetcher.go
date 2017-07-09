@@ -52,6 +52,7 @@ const (
 type Fetcher interface {
 	Fetch(ctx context.Context, url *url.URL, reqHdrs *http.Header, toFile bool, po progress.Output, id ...string) (string, error)
 	FetchAuthToken(url *url.URL) (*Token, error)
+	FetchWithHeaderAndBody(ctx context.Context, url *url.URL, reqHdrs *http.Header) (io.ReadCloser, http.Header, error)
 
 	Head(url *url.URL) (http.Header, error)
 
@@ -60,6 +61,7 @@ type Fetcher interface {
 	IsStatusUnauthorized() bool
 	IsStatusOK() bool
 	IsStatusNotFound() bool
+	Status() int
 
 	AuthURL() *url.URL
 }
@@ -116,6 +118,12 @@ func NewURLFetcher(options Options) Fetcher {
 		client:  client,
 		options: options,
 	}
+}
+
+func (u *URLFetcher) FetchWithHeaderAndBody(ctx context.Context, url *url.URL, reqHdrs *http.Header) (io.ReadCloser, http.Header, error) {
+	defer trace.End(trace.Begin(url.String()))
+
+	return u.fetch(ctx, url, reqHdrs, "")
 }
 
 // Fetch fetches from a url and stores its content in a temporary file.
@@ -472,4 +480,8 @@ func (u *URLFetcher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL,
 	auth.RawQuery = q.Encode()
 
 	return auth, nil
+}
+
+func (u *URLFetcher) Status() int {
+	return u.StatusCode
 }

@@ -46,6 +46,7 @@ type Pusher interface {
 	IsStatusAccepted() bool
 	IsStatusCreated() bool
 	IsStatusNoContent() bool
+	Status() int
 
 	ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error)
 	CompletedUpload(ctx context.Context, digest, uploadUrl string) error
@@ -436,4 +437,8 @@ func urlDeepCopy(src *url.URL) *url.URL {
 	}
 
 	return dest
+}
+
+func (u *URLPusher)Status() int {
+	return u.StatusCode
 }
