@@ -566,7 +566,7 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	//defer os.Remove("layer.tar")
 	//
 	//layer, err := ioutil.ReadFile("layer.tar")
-	layer, err := ioutil.ReadFile("/home/cheng/layer.tar.gz")
+	layer, err := ioutil.ReadFile("/home/cheng/busybox3.tar.gz")
 	if err != nil {
 		return err
 	}
@@ -604,28 +604,38 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	}
 	log.Infof("The upload url is: %s", uploadURL)
 
-	defer func() {
-		if err != nil {
-			if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
-				log.Errorf("Failed during CancelUpload: %s", err2)
-			}
-		} else {
-			//----------------step 3---------------
-			//notify the registry to complete the upload process
-			if err1 := pusher.CompletedUpload(ctx, diffID, uploadURL); err1 != nil {
-				// TODO: either retry or cancel upload
-				log.Errorf("failed during CompletedUpload: %s", err1)
-				if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
-					log.Errorf("failed during CancelUpload: %s", err2)
-				}
-			}
-		}
-	}()
-
-	//-----------------step 2------------------
-	if err = pusher.UploadLayer(ctx, diffID, uploadURL, layer); err != nil {
-		return err
+	/////////////////////////////////////////////
+	// obtain a list of repositories
+	res, err := ObtainRepoList(options, progressOutput)
+	if err != nil {
+		log.Errorf("Failed to fetch repo list: %s", err)
+	} else {
+		log.Infof("The repo list is: %s", res)
 	}
+	////////////////////////////////////////////
+
+	//defer func() {
+	//	if err != nil {
+	//		if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
+	//			log.Errorf("Failed during CancelUpload: %s", err2)
+	//		}
+	//	} else {
+	//		//----------------step 3---------------
+	//		//notify the registry to complete the upload process
+	//		if err1 := pusher.CompletedUpload(ctx, diffID, uploadURL); err1 != nil {
+	//			// TODO: either retry or cancel upload
+	//			log.Errorf("failed during CompletedUpload: %s", err1)
+	//			if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
+	//				log.Errorf("failed during CancelUpload: %s", err2)
+	//			}
+	//		}
+	//	}
+	//}()
+	//
+	////-----------------step 2------------------
+	//if err = pusher.UploadLayer(ctx, diffID, uploadURL, layer); err != nil {
+	//	return err
+	//}
 
 	return nil
 }
@@ -691,7 +701,6 @@ func LearnAuthURLForPush(options Options) (*url.URL, error) {
 	// We expect docker registry to return a 401 to us - with a WWW-Authenticate header
 	// We parse that header and learn the OAuth endpoint to fetch OAuth token.
 	hdr, err := pusher.Push(ctx, url, bytes.NewReader([]byte(" ")), nil, "POST")
-	//hdresponse, err := ctxhttp.Post(ctx, pusher.Client(), url.String(), "application/octet-stream", b)
 
 	if err != nil {
 		return nil, err
@@ -702,4 +711,66 @@ func LearnAuthURLForPush(options Options) (*url.URL, error) {
 	}
 
 	return nil, fmt.Errorf("%s returned an unexpected response: %s", url, err)
+}
+
+// ObtainRepoList
+func ObtainRepoList(options Options, progressOutput progress.Output) (string, error) {
+	defer trace.End(trace.Begin(options.Reference.String()))
+
+	_, token, err := obtainRepoList(options, nil, progressOutput)
+	if err != nil {
+		return "", err
+	}
+
+	repoList, _, err := obtainRepoList(options, token, progressOutput)
+	if err != nil {
+		return "", err
+	}
+
+	return repoList, nil
+}
+
+func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput progress.Output) (string, *urlfetcher.Token, error) {
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return "", nil, err
+	}
+
+	url.Path = path.Join(url.Path, "_catalog")
+	log.Debugf("obtainRepolist URL: %s", url)
+
+	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+		Token: 				token,
+	})
+
+	// We expect docker registry to return a 401 to us if token is nil - with a WWW-Authenticate header
+	// We parse that header and learn the OAuth endpoint to fetch OAuth token.
+	hdr, err := pusher.Push(ctx, url, nil, nil, "GET")
+
+	if err != nil {
+		return "", nil, err
+	}
+
+	if err == nil && pusher.IsStatusUnauthorized() {
+		oauthUrl, err := pusher.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to extact oauth url: %s", err)
+		}
+
+		token, err = FetchToken(ctx, options, oauthUrl, progressOutput)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to fetch OAuth token: %s", err)
+		}
+		return "", token, nil
+	}
+
+	if pusher.IsStatusOK() {
+		return
+
+	}
 }

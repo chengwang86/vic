@@ -276,6 +276,8 @@ func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl string, l
 		return nil
 	}
 
+	// retry upon 502, 503, 504
+
 	return fmt.Errorf("unexpected http code during UploadLayer: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
