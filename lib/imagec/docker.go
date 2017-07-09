@@ -544,7 +544,7 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 		return err
 	}
 
-	log.Debugf("The token is: %s", options.Token.Token)
+	//log.Debugf("The token is: %s", options.Token.Token)
 
 	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
 		Timeout:            options.Timeout,
@@ -761,6 +761,7 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to extact oauth url: %s", err)
 		}
+
 
 		token, err = FetchToken(ctx, options, oauthUrl, progressOutput)
 		if err != nil {

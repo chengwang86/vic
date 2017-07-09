@@ -479,6 +479,8 @@ func (u *URLFetcher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL,
 	}
 	auth.RawQuery = q.Encode()
 
+	log.Debugf("The auth url is: %s", auth)
+
 	return auth, nil
 }
 
