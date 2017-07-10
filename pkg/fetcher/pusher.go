@@ -110,19 +110,6 @@ func (u *URLPusher) Push(ctx context.Context, url *url.URL, body io.Reader, reqH
 		}
 	}
 
-	///////////////////
-	if operation == "PUT" {
-		state := req.FormValue("_state")
-		log.Infof("The form value of state is: %s", state)
-		decoded, err := base64.URLEncoding.DecodeString(state)
-		if err != nil {
-			log.Errorf("Failed to decode: %s", err)
-		} else {
-			log.Infof("The decoded URL is: %s", string(decoded))
-		}
-	}
-	////////////////////
-
 	res, err := ctxhttp.Do(ctx, u.client, req)
 	if err != nil {
 		return nil, err

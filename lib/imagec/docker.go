@@ -593,12 +593,6 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	//pushDigest := digester.Digest().String()
 	//log.Debugf("The push digest is: %s", pushDigest)
 
-	//layer, err := ioutil.ReadFile("/home/cheng/busybox3.tar.gz")
-	//if err != nil {
-	//	return err
-	//}
-	//
-
 	diffIDSum := sha256.New()
 	diffIDSum.Write([]byte(layer))
 	pushDigest := fmt.Sprintf("sha256:%x", diffIDSum.Sum(nil))
@@ -620,7 +614,7 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	}
 
 	/////////////////////////////////////////////
-	//// obtain a list of repositories
+	//// obtain a list of repositories for cross repo blob mount
 	//res, err := ObtainRepoList(options, progressOutput)
 	//if err != nil {
 	//	log.Errorf("Failed to fetch repo list: %s", err)
@@ -648,15 +642,7 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 				log.Errorf("Failed during CancelUpload: %s", err2)
 			}
 		} else {
-			//----------------step 3---------------
-			//notify the registry to complete the upload process
-			if err1 := pusher.CompletedUpload(ctx, pushDigest, uploadURL); err1 != nil {
-				// TODO: either retry or cancel upload
-				log.Errorf("failed during CompletedUpload: %s", err1)
-				if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
-					log.Errorf("failed during CancelUpload: %s", err2)
-				}
-			}
+			//----------------no need for step 3 since we use monolithic upload---------------
 		}
 	}()
 
@@ -668,11 +654,8 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	return nil
 }
 
-func CrossRepoBlobMount(ctx context.Context, registry *url.URL, digest, image string, pusher *urlfetcher.URLPusher) (string, error) {
+func CrossRepoBlobMount(ctx context.Context, registry *url.URL, digest, image string, repoList []string, pusher *urlfetcher.URLPusher) (string, error) {
 	defer trace.End(trace.Begin(image))
-
-	// TODO: obtain a list of repositories that the user has access to
-	repoList := make([]string, 2)
 
 	log.Infof("The list of repositories is: %+v", repoList)
 
