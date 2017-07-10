@@ -23,9 +23,8 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 
-	"io"
-	"encoding/base64"
 	"fmt"
+	"io"
 	"strings"
 
 	"bytes"
@@ -266,7 +265,7 @@ func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl, size str
 
 	reqHdrs := &http.Header{
 		//"Content-Length": {size},
-		"Content-Type":   {"application/octet-stream"},
+		"Content-Type": {"application/octet-stream"},
 	}
 
 	_, err = u.Push(ctx, composedUrl, layer, reqHdrs, "PUT")
@@ -444,6 +443,6 @@ func urlDeepCopy(src *url.URL) *url.URL {
 	return dest
 }
 
-func (u *URLPusher)Status() int {
+func (u *URLPusher) Status() int {
 	return u.StatusCode
 }

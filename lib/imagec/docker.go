@@ -571,13 +571,27 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	defer os.Remove("layer.tar")
 
 	layer, err := ioutil.ReadFile("layer.tar")
-	//var reader io.ReadCloser
-	//
-	//bt, err := ioutil.ReadFile("layer.tar")
 	if err != nil {
 		return err
 	}
-	//contentReader := ioutil.NopCloser(bytes.NewBuffer(bt))
+
+	//var buf bytes.Buffer
+	//zw := gzip.NewWriter(&buf)
+	//
+	//nn, err := zw.Write(layer)
+	//if err != nil {
+	//	return fmt.Errorf("failed when compressing layer: %s", err)
+	//}
+	//log.Debugf("The layer is compressed into %d bytes", nn)
+	//
+	//zr, err := gzip.NewReader(&buf)
+	//if err != nil {
+	//	return fmt.Errorf("failed when compressing layer: %s", err)
+	//}
+
+	////--------from docker-----------
+	//var reader io.ReadCloser
+	//contentReader := ioutil.NopCloser(bytes.NewBuffer(layer))
 	//size := int64(1024000)
 	//reader = progress.NewProgressReader(ioutils.NewCancelReadCloser(ctx, contentReader), progressOutput, size, "mock layer", "Pushing")
 	//
@@ -592,16 +606,14 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	//tee := io.TeeReader(reader, digester.Hash())
 	//pushDigest := digester.Digest().String()
 	//log.Debugf("The push digest is: %s", pushDigest)
+	//-----------------------------
 
 	diffIDSum := sha256.New()
 	diffIDSum.Write([]byte(layer))
+	//diffIDSum.Write(buf.Bytes())
 	pushDigest := fmt.Sprintf("sha256:%x", diffIDSum.Sum(nil))
 	log.Infof("The calculated tar digest for the mock data is: %s", pushDigest)
-	//
-	//// this is the diffID obtained by getImage(busybox) offline
-	////pushDigest = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
-	////pushDigest = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033b"
-	//
+
 	exist, err := pusher.CheckLayerExistence(ctx, options.Image, pushDigest, registryUrl)
 	if err != nil {
 		return fmt.Errorf("failed to check layer existence: %s", err)
@@ -648,6 +660,8 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 
 	//-----------------step 2------------------
 	if err = pusher.UploadLayer(ctx, pushDigest, uploadURL, "", bytes.NewBuffer(layer)); err != nil {
+		//if err = pusher.UploadLayer(ctx, pushDigest, uploadURL, "", tee); err != nil {
+		//if err = pusher.UploadLayer(ctx, pushDigest, uploadURL, "", zr); err != nil {
 		return err
 	}
 
