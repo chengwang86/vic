@@ -24,13 +24,12 @@ import (
 	log "github.com/Sirupsen/logrus"
 
 	"io"
-
+	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"bytes"
 	"path"
-	"strconv"
 
 	"github.com/vmware/vic/pkg/trace"
 	"github.com/vmware/vic/pkg/version"
@@ -50,7 +49,7 @@ type Pusher interface {
 
 	ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error)
 	CompletedUpload(ctx context.Context, digest, uploadUrl string) error
-	UploadLayer(ctx context.Context, digest, uploadUrl string, layer []byte) error
+	UploadLayer(ctx context.Context, digest, uploadUrl, size string, layer io.Reader) error
 	CancelUpload(ctx context.Context, uploadUrl string) error
 	ObtainUploadUrl(ctx context.Context, registry *url.URL, image string) (string, error)
 	CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL) (bool, error)
@@ -110,6 +109,19 @@ func (u *URLPusher) Push(ctx context.Context, url *url.URL, body io.Reader, reqH
 			}
 		}
 	}
+
+	///////////////////
+	if operation == "PUT" {
+		state := req.FormValue("_state")
+		log.Infof("The form value of state is: %s", state)
+		decoded, err := base64.URLEncoding.DecodeString(state)
+		if err != nil {
+			log.Errorf("Failed to decode: %s", err)
+		} else {
+			log.Infof("The decoded URL is: %s", string(decoded))
+		}
+	}
+	////////////////////
 
 	res, err := ctxhttp.Do(ctx, u.client, req)
 	if err != nil {
@@ -212,8 +224,8 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 		}
 		if strings.HasPrefix(token, "scope") {
 			scope = strings.Trim(token[len("scope="):], "\"")
-			//scope += ","
-			//scope += tokens[len(tokens)-1]
+			scope += ","
+			scope += tokens[len(tokens)-1]
 		}
 	}
 
@@ -251,23 +263,26 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 // upload the layer (monolithic upload)
 // PUT /v2/<name>/blobs/uploads/<uuid>?digest=<digest>; this uuid is from the `location` header
 // in the response of the first step if successful
-func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl string, layer []byte) error {
+func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl, size string, layer io.Reader) error {
 	defer trace.End(trace.Begin(uploadUrl))
 
-	uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
+	//uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
 	composedUrl, err := url.Parse(uploadUrl)
 	if err != nil {
 		return fmt.Errorf("failed to parse uploadUrl: %s", err)
 	}
+	q := composedUrl.Query()
+	q.Add("digest", digest)
+	composedUrl.RawQuery = q.Encode()
 
 	log.Infof("The url for UploadLayer is: %s", composedUrl)
 
 	reqHdrs := &http.Header{
-		"Content-Length": {strconv.Itoa(len(layer))},
+		//"Content-Length": {size},
 		"Content-Type":   {"application/octet-stream"},
 	}
 
-	_, err = u.Push(ctx, composedUrl, bytes.NewReader(layer), reqHdrs, "PUT")
+	_, err = u.Push(ctx, composedUrl, layer, reqHdrs, "PUT")
 	if err != nil {
 		return fmt.Errorf("failed to upload layer: %s", err)
 	}
@@ -313,8 +328,11 @@ func (u *URLPusher) CompletedUpload(ctx context.Context, digest, uploadUrl strin
 	// a PUT request with a digest parameter and zero-length body
 	// may be sent to complete and validated the upload.
 
-	uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
+	//uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
 	composedUrl, err := url.Parse(uploadUrl)
+	q := composedUrl.Query()
+	q.Add("digest", digest)
+	composedUrl.RawQuery = q.Encode()
 
 	log.Debugf("The url for CompletedUpload is: %s", composedUrl)
 

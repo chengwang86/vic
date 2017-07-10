@@ -40,6 +40,9 @@ import (
 
 	"bytes"
 
+	"bufio"
+	"compress/gzip"
+
 	urlfetcher "github.com/vmware/vic/pkg/fetcher"
 	registryutils "github.com/vmware/vic/pkg/registry"
 	"github.com/vmware/vic/pkg/trace"
@@ -49,6 +52,8 @@ const (
 	// DigestSHA256EmptyTar is the canonical sha256 digest of empty tar file -
 	// (1024 NULL bytes)
 	DigestSHA256EmptyTar = string(dlayer.DigestSHA256EmptyTar)
+
+	compressionBufSize = 32768
 )
 
 // FSLayer is a container struct for BlobSums defined in an image manifest
@@ -554,33 +559,56 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 		InsecureSkipVerify: options.InsecureSkipVerify,
 		RootCAs:            options.RegistryCAs,
 	})
-
-	//------------------step 1-----------------
-	// the layer tar might be passed into this function in the stream format instead of a stored variable
-	// here I just use mock data
-	//bigBuff := make([]byte, 1024000)
-	//err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
-	//if err != nil {
-	//	return err
-	//}
-	//defer os.Remove("layer.tar")
 	//
-	//layer, err := ioutil.ReadFile("layer.tar")
-	layer, err := ioutil.ReadFile("/home/cheng/busybox3.tar.gz")
+	////------------------step 1-----------------
+	//// the layer tar might be passed into this function in the stream format instead of a stored variable
+	//// here I just use mock data
+	bigBuff := make([]byte, 1024000)
+	err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
 	if err != nil {
 		return err
 	}
+	defer os.Remove("layer.tar")
+
+	layer, err := ioutil.ReadFile("layer.tar")
+	//var reader io.ReadCloser
+	//
+	//bt, err := ioutil.ReadFile("layer.tar")
+	if err != nil {
+		return err
+	}
+	//contentReader := ioutil.NopCloser(bytes.NewBuffer(bt))
+	//size := int64(1024000)
+	//reader = progress.NewProgressReader(ioutils.NewCancelReadCloser(ctx, contentReader), progressOutput, size, "mock layer", "Pushing")
+	//
+	//compressedReader, compressionDone := compress(reader)
+	//defer func(closer io.Closer) {
+	//	closer.Close()
+	//	<-compressionDone
+	//}(reader)
+	//reader = compressedReader
+	//
+	//digester := digest.Canonical.New()
+	//tee := io.TeeReader(reader, digester.Hash())
+	//pushDigest := digester.Digest().String()
+	//log.Debugf("The push digest is: %s", pushDigest)
+
+	//layer, err := ioutil.ReadFile("/home/cheng/busybox3.tar.gz")
+	//if err != nil {
+	//	return err
+	//}
+	//
 
 	diffIDSum := sha256.New()
 	diffIDSum.Write([]byte(layer))
-	diffID := fmt.Sprintf("sha256:%x", diffIDSum.Sum(nil))
-	log.Infof("The calculated tar digest for the mock data is: %s", diffID)
-
-	// this is the diffID obtained by getImage(busybox) offline
-	//diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
-	//diffID = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033b"
-
-	exist, err := pusher.CheckLayerExistence(ctx, options.Image, diffID, registryUrl)
+	pushDigest := fmt.Sprintf("sha256:%x", diffIDSum.Sum(nil))
+	log.Infof("The calculated tar digest for the mock data is: %s", pushDigest)
+	//
+	//// this is the diffID obtained by getImage(busybox) offline
+	////pushDigest = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
+	////pushDigest = "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033b"
+	//
+	exist, err := pusher.CheckLayerExistence(ctx, options.Image, pushDigest, registryUrl)
 	if err != nil {
 		return fmt.Errorf("failed to check layer existence: %s", err)
 	}
@@ -592,13 +620,13 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	}
 
 	/////////////////////////////////////////////
-	// obtain a list of repositories
-	res, err := ObtainRepoList(options, progressOutput)
-	if err != nil {
-		log.Errorf("Failed to fetch repo list: %s", err)
-	} else {
-		log.Infof("The repo list is: %s", res)
-	}
+	//// obtain a list of repositories
+	//res, err := ObtainRepoList(options, progressOutput)
+	//if err != nil {
+	//	log.Errorf("Failed to fetch repo list: %s", err)
+	//} else {
+	//	log.Infof("The repo list is: %s", res)
+	//}
 	////////////////////////////////////////////
 
 	//--------------------step 0---------------
@@ -608,34 +636,34 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	// vanilla docker does this as well
 	// TODO: instead of directly obtaining the upload url, we could try "Cross Repository Blob Mount"
 
-	//uploadURL, err := pusher.ObtainUploadUrl(ctx, registryUrl, options.Image)
-	//if err != nil {
-	//	return err
-	//}
-	//log.Infof("The upload url is: %s", uploadURL)
+	uploadURL, err := pusher.ObtainUploadUrl(ctx, registryUrl, options.Image)
+	if err != nil {
+		return err
+	}
+	log.Infof("The upload url is: %s", uploadURL)
 
-	//defer func() {
-	//	if err != nil {
-	//		if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
-	//			log.Errorf("Failed during CancelUpload: %s", err2)
-	//		}
-	//	} else {
-	//		//----------------step 3---------------
-	//		//notify the registry to complete the upload process
-	//		if err1 := pusher.CompletedUpload(ctx, diffID, uploadURL); err1 != nil {
-	//			// TODO: either retry or cancel upload
-	//			log.Errorf("failed during CompletedUpload: %s", err1)
-	//			if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
-	//				log.Errorf("failed during CancelUpload: %s", err2)
-	//			}
-	//		}
-	//	}
-	//}()
-	//
-	////-----------------step 2------------------
-	//if err = pusher.UploadLayer(ctx, diffID, uploadURL, layer); err != nil {
-	//	return err
-	//}
+	defer func() {
+		if err != nil {
+			if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
+				log.Errorf("Failed during CancelUpload: %s", err2)
+			}
+		} else {
+			//----------------step 3---------------
+			//notify the registry to complete the upload process
+			if err1 := pusher.CompletedUpload(ctx, pushDigest, uploadURL); err1 != nil {
+				// TODO: either retry or cancel upload
+				log.Errorf("failed during CompletedUpload: %s", err1)
+				if err2 := pusher.CancelUpload(ctx, uploadURL); err2 != nil {
+					log.Errorf("failed during CancelUpload: %s", err2)
+				}
+			}
+		}
+	}()
+
+	//-----------------step 2------------------
+	if err = pusher.UploadLayer(ctx, pushDigest, uploadURL, "", bytes.NewBuffer(layer)); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -745,7 +773,7 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 		Password:           options.Password,
 		InsecureSkipVerify: options.InsecureSkipVerify,
 		RootCAs:            options.RegistryCAs,
-		Token: 				token,
+		Token:              token,
 	})
 
 	// We expect docker registry to return a 401 to us if token is nil - with a WWW-Authenticate header
@@ -761,7 +789,6 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to extact oauth url: %s", err)
 		}
-
 
 		token, err = FetchToken(ctx, options, oauthUrl, progressOutput)
 		if err != nil {
@@ -783,4 +810,31 @@ func obtainRepoList(options Options, token *urlfetcher.Token, progressOutput pro
 	}
 
 	return "", nil, fmt.Errorf("Unexpected http code: %d, URL: %s", fetcher.Status(), url)
+}
+
+func compress(in io.Reader) (io.ReadCloser, chan struct{}) {
+	compressionDone := make(chan struct{})
+
+	pipeReader, pipeWriter := io.Pipe()
+	// Use a bufio.Writer to avoid excessive chunking in HTTP request.
+	bufWriter := bufio.NewWriterSize(pipeWriter, compressionBufSize)
+	compressor := gzip.NewWriter(bufWriter)
+
+	go func() {
+		_, err := io.Copy(compressor, in)
+		if err == nil {
+			err = compressor.Close()
+		}
+		if err == nil {
+			err = bufWriter.Flush()
+		}
+		if err != nil {
+			pipeWriter.CloseWithError(err)
+		} else {
+			pipeWriter.Close()
+		}
+		close(compressionDone)
+	}()
+
+	return pipeReader, compressionDone
 }
