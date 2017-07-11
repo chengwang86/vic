@@ -549,8 +549,6 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 		return err
 	}
 
-	//log.Debugf("The token is: %s", options.Token.Token)
-
 	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
 		Timeout:            options.Timeout,
 		Username:           options.Username,
@@ -634,16 +632,17 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	//	log.Infof("The repo list is: %s", res)
 	//}
 	////////////////////////////////////////////
-	//repoList := []string{"atest/busybox", "cheng-test/busybox", "test/busybox"}
-	//mounted, err := CrossRepoBlobMount(ctx, registryUrl, pushDigest, options, repoList)
-	//if err != nil {
-	//	return fmt.Errorf("failed during CrossRepoBlobMount: %s", err)
-	//}
-	//if mounted {
-	//	layerID := "layerID"
-	//	progress.Update(progressOutput, layerID, "Layer already mounted")
-	//	return nil
-	//}
+	//repoList := []string{"atest/busybox", "cheng-test/busybox", "test/busybox"} // kang.eng.vmware.com
+	repoList := []string{"patiner/aaa", "patiner/ubuntu", "patiner/busybox", "patiner/test"}  //dockerhub
+	mounted, err := CrossRepoBlobMount(ctx, pushDigest, options, repoList, progressOutput)
+	if err != nil {
+		return fmt.Errorf("failed during CrossRepoBlobMount: %s", err)
+	}
+	if mounted {
+		layerID := "layerID"
+		progress.Update(progressOutput, layerID, "Layer already mounted")
+		return nil
+	}
 
 	//--------------------step 0---------------
 	// obtain upload url to start upload process
@@ -678,29 +677,88 @@ func PushImageBlob(ctx context.Context, options Options, progressOutput progress
 	return nil
 }
 
-func CrossRepoBlobMount(ctx context.Context, registry *url.URL, digest string, options Options, repoList []string) (bool, error) {
+func CrossRepoBlobMount(ctx context.Context, digest string, options Options, repoList []string, po progress.Output) (bool, error) {
 	defer trace.End(trace.Begin(options.Image))
 
 	log.Infof("The list of repositories is: %+v", repoList)
 
 	var (
-		mounted   bool
-		err       error
+		mounted  bool
+		authURL  *url.URL
+		newToken *urlfetcher.Token
 	)
 
-	pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
-		Timeout:            options.Timeout,
-		Username:           options.Username,
-		Password:           options.Password,
-		Token:              options.Token,
-		InsecureSkipVerify: options.InsecureSkipVerify,
-		RootCAs:            options.RegistryCAs,
-	})
+	registry, err := url.Parse(options.Registry)
+	if err != nil {
+		return false, err
+	}
 
-	// if mount fails, the registry will fall back to the standard upload behavior
-	// and return a 202 Accepted with the upload URL in the Location header
 	for _, repo := range repoList {
-		mounted, _, err = pusher.MountBlobToRepo(ctx, registry, digest, options.Image, repo)
+
+		// first obtain the auth url and token
+		composedUrl, _ := url.Parse(options.Registry)
+		composedUrl.Path = path.Join(composedUrl.Path, options.Image, "blobs/uploads")
+		composedUrl.Path += "/"
+
+		q := composedUrl.Query()
+		q.Add("mount", digest)
+		q.Add("from", repo)
+		composedUrl.RawQuery = q.Encode()
+
+		log.Infof("The url for MountBlobToRepo is: %s\n ", composedUrl)
+
+		// POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repository name>
+		// Content-Length: 0
+		reqHdrs := &http.Header{
+			"Content-Length": {"0"},
+		}
+
+		pusher := urlfetcher.NewURLPusher(urlfetcher.Options{
+			Timeout:            options.Timeout,
+			Username:           options.Username,
+			Password:           options.Password,
+			InsecureSkipVerify: options.InsecureSkipVerify,
+			RootCAs:            options.RegistryCAs,
+		})
+
+		// We expect docker registry to return a 401 to us - with a WWW-Authenticate header
+		// We parse that header and learn the OAuth endpoint to fetch OAuth token.
+		hdr, err := pusher.Push(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, "POST")
+
+		if err != nil {
+			return false, err
+		}
+
+		if pusher.IsStatusUnauthorized() {
+			authURL, err = pusher.ExtractOAuthURL(hdr.Get("www-authenticate"), composedUrl)
+			if err != nil {
+				return false, err
+			}
+		}
+
+		log.Infof("The url for authenticating CrossRepoBlobMount is: %+v", authURL)
+
+		// Get the OAuth token - if only we have a URL
+		if authURL != nil {
+			newToken, err = FetchToken(ctx, options, authURL, po)
+			if err != nil {
+				log.Errorf("Failed to fetch OAuth token: %s", err)
+				return false, err
+			}
+		}
+
+		newPusher := urlfetcher.NewURLPusher(urlfetcher.Options{
+			Timeout:            options.Timeout,
+			Username:           options.Username,
+			Password:           options.Password,
+			Token:              newToken,
+			InsecureSkipVerify: options.InsecureSkipVerify,
+			RootCAs:            options.RegistryCAs,
+		})
+
+		// if mount fails, the registry will fall back to the standard upload behavior
+		// and return a 202 Accepted with the upload URL in the Location header
+		mounted, _, err = newPusher.MountBlobToRepo(ctx, registry, digest, options.Image, repo)
 		if err != nil {
 			log.Errorf("Mount layer to repo %s failed: %s", repo, err)
 			//return false, err

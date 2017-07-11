@@ -191,13 +191,18 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 
 	log.Infof("the hdr in ExtractAuthURL is: %s", hdr)
 	tokens := strings.Split(hdr, " ")
-	if len(tokens) != 2 || strings.ToLower(tokens[0]) != "bearer" {
+	if strings.ToLower(tokens[0]) != "bearer" {
 		err := fmt.Errorf("www-authenticate header is corrupted")
 		return nil, DoNotRetry{Err: err}
 	}
 	// example for tokens[1]:
-	// realm=\"https://kang.eng.vmware.com/service/token\",service=\"harbor-registry\",scope=\"repository:cheng-test/busybox:pull,push\"
+	// bearer realm=\"https://kang.eng.vmware.com/service/token\",
+	// service=\"harbor-registry\",
+	// scope=\"repository:test/busybox:pull,push repository:test/ubuntu:pull\"
 	// if we use ',' as the separator, the last 'push' will be missing; but so far it works well without the last "push" in "scope"
+	if len(tokens) == 3 {
+		tokens[1] += " " + tokens[2]
+	}
 	tokens = strings.Split(tokens[1], ",")
 
 	var realm, service, scope string
