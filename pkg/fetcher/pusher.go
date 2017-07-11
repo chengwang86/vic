@@ -211,7 +211,7 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 		if strings.HasPrefix(token, "scope") {
 			scope = strings.Trim(token[len("scope="):], "\"")
 			scope += ","
-			scope += tokens[len(tokens)-1]
+			scope += strings.Trim(tokens[len(tokens)-1], "\"")
 		}
 	}
 
@@ -395,8 +395,13 @@ func (u *URLPusher) MountBlobToRepo(ctx context.Context, registry *url.URL, dige
 	defer trace.End(trace.Begin("image: " + image + ", repo: " + repo))
 
 	composedUrl := urlDeepCopy(registry)
-	suffix := fmt.Sprintf("blobs/uploads?mount=%s&from=%s", digest, repo)
-	composedUrl.Path = path.Join(registry.Path, image, suffix)
+	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads")
+	composedUrl.Path += "/"
+
+	q := composedUrl.Query()
+	q.Add("mount", digest)
+	q.Add("from", repo)
+	composedUrl.RawQuery = q.Encode()
 
 	log.Infof("The url for MountBlobToRepo is: %s\n ", composedUrl)
 
@@ -406,12 +411,10 @@ func (u *URLPusher) MountBlobToRepo(ctx context.Context, registry *url.URL, dige
 		"Content-Length": {"0"},
 	}
 
-	hdr, err := u.Push(ctx, composedUrl, nil, reqHdrs, "POST")
+	hdr, err := u.Push(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, "POST")
 	if err != nil {
 		return false, "", fmt.Errorf("failed to mount blob to repo: %s", err)
 	}
-
-	log.Infof("MountBlobToRepo res.Header: %+v", hdr)
 
 	if u.IsStatusCreated() {
 		log.Infof("The blob is already mounted to the repo!")
