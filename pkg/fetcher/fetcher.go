@@ -52,7 +52,6 @@ const (
 type Fetcher interface {
 	Fetch(ctx context.Context, url *url.URL, reqHdrs *http.Header, toFile bool, po progress.Output, id ...string) (string, error)
 	FetchAuthToken(url *url.URL) (*Token, error)
-	FetchWithHeaderAndBody(ctx context.Context, url *url.URL, reqHdrs *http.Header) (io.ReadCloser, http.Header, error)
 
 	Head(url *url.URL) (http.Header, error)
 
@@ -118,12 +117,6 @@ func NewURLFetcher(options Options) Fetcher {
 		client:  client,
 		options: options,
 	}
-}
-
-func (u *URLFetcher) FetchWithHeaderAndBody(ctx context.Context, url *url.URL, reqHdrs *http.Header) (io.ReadCloser, http.Header, error) {
-	defer trace.End(trace.Begin(url.String()))
-
-	return u.fetch(ctx, url, reqHdrs, "")
 }
 
 // Fetch fetches from a url and stores its content in a temporary file.
@@ -278,8 +271,9 @@ func (u *URLFetcher) fetch(ctx context.Context, url *url.URL, reqHdrs *http.Head
 
 		// check if image is non-existent (#757)
 		if strings.Contains(hdr, "error=\"insufficient_scope\"") {
-			err = fmt.Errorf("image not found")
-			return nil, nil, ImageNotFoundError{Err: err}
+			//err = fmt.Errorf("image not found")
+			//return nil, nil, ImageNotFoundError{Err: err}
+			return nil, nil, fmt.Errorf("not authorized - insufficient_scope")
 		} else if strings.Contains(hdr, "error=\"invalid_token\"") {
 			return nil, nil, fmt.Errorf("not authorized")
 		} else {
