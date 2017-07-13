@@ -410,10 +410,6 @@ func (i *Image) PullImage(ctx context.Context, image, tag string, metaHeaders ma
 	return nil
 }
 
-func (i *Image) PushImage(ctx context.Context, image, tag string, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
-	return fmt.Errorf("%s does not yet implement image.PushImage", ProductName())
-}
-
 func (i *Image) SearchRegistryForImages(ctx context.Context, filtersArgs string, term string, limit int, authConfig *types.AuthConfig, metaHeaders map[string][]string) (*registry.SearchResults, error) {
 	return nil, fmt.Errorf("%s does not yet implement image.SearchRegistryForImages", ProductName())
 }

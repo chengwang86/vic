@@ -15,6 +15,7 @@
 package imagec
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -40,6 +41,8 @@ import (
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/reference"
+
+	"sync"
 
 	"github.com/vmware/vic/lib/apiservers/engine/backends/cache"
 	"github.com/vmware/vic/lib/apiservers/portlayer/models"
@@ -129,11 +132,26 @@ type ImageWithMeta struct {
 	Downloading bool
 }
 
+// ArchiveStream is used during image push
+type ArchiveStream struct {
+	pipeReader *io.PipeReader
+	pipeWriter *io.PipeWriter
+	size       int64
+	digest     string
+}
+
 // Pusher contains all "prepared" data needed to push an image
 type Pusher struct {
+	pushWg          sync.WaitGroup
 	schema2Manifest schema2.Manifest
-	layerReaders    map[string]io.ReadCloser
+	streamMap       map[string]*ArchiveStream
+
+	// Function from imagec caller to get archive reader.  This reduce the need for imageC
+	// from knowing about the portlayer and persona.
+	ArchiveReader GetArchiveReader
 }
+
+type GetArchiveReader func(ctx context.Context, layerID string) (io.ReadCloser, error)
 
 func (i *ImageWithMeta) String() string {
 	return stringid.TruncateID(i.Layer.BlobSum)
@@ -508,13 +526,16 @@ func (ic *ImageC) PushImage() error {
 		return err
 	}
 
-	// if err := ic.PrepareLayersToPush(); err != nil {
-	// 	return err
-	// }
-
 	// Upload all the layers
 	var lum LayerUploader
 	if err := lum.UploadLayers(ctx, ic); err != nil {
+		return err
+	}
+
+	// Wait for all layers to complete upload and their streams hashed
+	ic.Pusher.pushWg.Wait()
+
+	if err := ic.FinalizeManifest(); err != nil {
 		return err
 	}
 
@@ -658,9 +679,7 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 		return fmt.Errorf("Unable to get top layer id for image %s", id)
 	}
 
-	// create []ManifestLayers to append the layers in
-	// manifestLayerCount := 0
-	// manifestLayers := make([]*distribution.Descriptor, 0)
+	// Build a layers history slice and add layers to stream map
 	var layersHistory []*ImageWithMeta
 	layersHistory = append(layersHistory, layer)
 
@@ -671,17 +690,7 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 			break
 		}
 
-		pusher.layerReaders[layerID] = nil
-
-		// // add to the ManifestLayers[] by calculating layer digest and size
-		// layerSize := layer.Size                     // ?
-		// layerDigest := sha256.Sum256([]byte(layer)) // ? or is it layer.Layer? needs to be tested
-
-		// layer := &distribution.Describable{
-		// 	Size:   layerSize,
-		// 	Digest: layerDigest,
-		// }
-		// manifestLayers = append(manifestLayers, layer)
+		pusher.streamMap[layerID] = &ArchiveStream{}
 
 		// set the layer to the parent layer
 		layerID := layer.Image.Parent
@@ -716,6 +725,31 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 			Digest:    digest.Digest(configDigest),
 		},
 	}
+
+	return nil
+}
+
+// FinalizeManifest builds the layer information in the manifest.  This information cannot
+// be determined till the layer tar streams were read and pushed.
+func (ic *ImageC) FinalizeManifest() error {
+	pusher := ic.Pusher
+
+	if pusher == nil {
+		return fmt.Errorf("Nil pusher")
+	}
+
+	var layers []distribution.Descriptor
+	for _, stream := range pusher.streamMap {
+		var layer distribution.Descriptor
+
+		layer.Digest = digest.Digest(stream.digest)
+		layer.Size = stream.size
+		layer.MediaType = schema2.MediaTypeLayer
+
+		layers = append(layers, layer)
+	}
+
+	pusher.schema2Manifest.Layers = layers
 
 	return nil
 }
@@ -797,15 +831,67 @@ func (ic *ImageC) dockerImageFromVicImage(images []*ImageWithMeta) (*docker.Imag
 // GetReaderForLayer returns a io.ReadCloser for the archive stream connection to the
 //	portlayer
 func (p *Pusher) GetReaderForLayer(layerID string) (io.ReadCloser, error) {
-	var reader io.ReadCloser
-
-	if reader, ok := p.layerReaders[layerID]; ok {
-		if reader == nil {
-			//Initialize an archive stream from the portlayer for the layer
-
-			// reader, err = proxy.ArchiveExportReader(context.Background(), store, "", layerID, "", true, node.filterSpec)
-		}
+	stream, ok := p.streamMap[layerID]
+	if ok && stream != nil {
+		return nil, fmt.Errorf("Stream for layer %s already in use", layerID)
 	}
 
-	return reader, nil
+	if stream == nil {
+		stream = &ArchiveStream{}
+		p.streamMap[layerID] = stream
+	}
+
+	if stream.pipeReader == nil {
+		if p.ArchiveReader == nil {
+			return nil, fmt.Errorf("No archive reader function provided to imageC")
+		}
+
+		//Initialize an archive stream from the portlayer for the layer
+
+		ar, err := p.ArchiveReader(context.Background(), layerID)
+		if err != nil || ar == nil {
+			return nil, fmt.Errorf("Failed to get reader for layer %s", layerID)
+		}
+
+		stream.pipeReader, stream.pipeWriter = io.Pipe()
+		go func() {
+			p.pushWg.Add(1)
+
+			defer ar.Close()
+			defer stream.pipeWriter.Close()
+
+			gzipReader, err := gzip.NewReader(ar)
+			if err != nil {
+				return
+			}
+
+			h := sha256.New()
+			mw := io.MultiWriter(stream.pipeWriter, h)
+			written, err := io.Copy(mw, gzipReader)
+			if err != nil {
+				switch err {
+				//FIXME:  Add error cases
+				}
+			}
+
+			stream.size = written
+			stream.digest = fmt.Sprintf("%x", h.Sum(nil))
+
+			p.pushWg.Done()
+		}()
+	} else {
+		// If stream.reader != nil then assume it's in use
+		return nil, fmt.Errorf("Stream for layer %s already in use", layerID)
+	}
+
+	return stream.pipeReader, nil
+}
+
+// CloseAll closes all active streams and clears out the streamMap
+func (p *Pusher) CloseAll() {
+	for _, stream := range p.streamMap {
+		stream.pipeReader.Close()
+	}
+
+	p.streamMap = nil
 }
