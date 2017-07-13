@@ -17,22 +17,21 @@ package imagec
 import (
 	"context"
 
-	"google.golang.org/appengine/log"
-
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/pkg/progress"
+	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/vmware/vic/pkg/trace"
 )
 
 // LayerUploader uploads layers
 type LayerUploader struct {
 	tm xfer.TransferManager
-
-	err error
 }
 
 type uploadTransfer struct {
-	Transfer
+	xfer.Transfer
+
+	err error
 }
 
 const (
@@ -52,27 +51,27 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 	defer trace.End(trace.Begin(""))
 
 	var (
-		uploads      []*uploadTransfer
-		currTransfer = make(map[string]*uploadTransfer)
+		uploads        []*uploadTransfer
+		currTransfer   = make(map[string]*uploadTransfer)
+		sf             = streamformatter.NewJSONStreamFormatter()
+		progressOutput = &serialProgressOutput{
+			c:   make(chan prog, 100),
+			out: sf.NewProgressOutput(ic.Outstream, false),
+		}
 	)
 
 	for _, layer := range ic.ImageLayers {
-		progress.Update(progressOutput, descriptor.ID(), "Preparing")
+		progress.Update(progressOutput, layer.String(), "Preparing")
 
 		if _, present := currTransfer[layer.ID]; present {
 			continue
 		}
 
-		layerConfig, err := LayerCache().Get(layer.ID)
-		if err != nil {
-			return err
-		}
-
-		xferFunc := lum.makeUploadFunc(layer)
+		xferFunc := lum.makeUploadFunc(layer, ic)
 		upload, watcher := lum.tm.Transfer(layer.ID, xferFunc, progressOutput)
 		defer upload.Release(watcher)
 		uploads = append(uploads, upload.(*uploadTransfer))
-		currTransfer[key] = upload.(*uploadTransfer)
+		currTransfer[layer.ID] = upload.(*uploadTransfer)
 
 	}
 
@@ -90,10 +89,10 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 	return nil
 }
 
-func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC, descriptor UploadDescriptor) DoFunc {
-	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
+func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.DoFunc {
+	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) xfer.Transfer {
 		u := &uploadTransfer{
-			Transfer: NewTransfer(),
+			Transfer: xfer.NewTransfer(),
 		}
 
 		go func() {
@@ -110,10 +109,12 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC, descr
 				<-start
 			}
 
+			layerReader := ic.Pusher.layerReaders[layer.ID]
+
 			// PutImageBlob will handle retries and backoff
-			err := PutImageBlob(u.Transfer.Context(), ic.Options, layer, progressOutput)
+			err := PushImageBlob(u.Transfer.Context(), ic.Options, layerReader, progressOutput)
 			if err != nil {
-				log.Errorf("Error pushing image blob for %s/%s: %s", ic.Image, layer.ID, err)
+				// log.Errorf("Error pushing image blob for %s/%s: %s", ic.Image, layer.ID, err)
 				return
 			}
 		}()

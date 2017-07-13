@@ -16,9 +16,11 @@ package imagec
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -299,7 +301,7 @@ func FetchImageBlob(ctx context.Context, options Options, image *ImageWithMeta, 
 	return diffID, nil
 }
 
-func PushImageBlob(ctx context.Context, options Options, progressOutput progress.Output) (err error) {
+func PushImageBlob(ctx context.Context, options Options, layerReader io.ReadCloser, progressOutput progress.Output) (err error) {
 	return nil
 }
 
@@ -369,10 +371,7 @@ func FetchImageManifest(ctx context.Context, options Options, schemaVersion int,
 }
 
 // PutImageManifest simply pushes the manifest up to the registry.
-func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
-	if schema2, ok := manifest.(*schema2.DeserializedManifest); !ok {
-	}
-
+func PutImageManifest(ctx context.Context, pusher *Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
 	tr := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
@@ -394,7 +393,7 @@ func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schem
 
 	// Add content type headers
 	reqHeaders := make(http.Header)
-	var dataReader io.ByteReader
+	var dataReader io.Reader
 
 	switch schemaVersion {
 	case 1: //schema 1, signed manifest
@@ -402,13 +401,13 @@ func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schem
 		log.Errorf("Schema 1 push not supported")
 	case 2: //schema 2
 		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
-		dataReader, err = getManifestSchema2Reader(options, manifest)
+		dataReader, err = getManifestSchema2Reader(options, pusher.schema2Manifest)
 		if err != nil {
 			log.Errorf("Failed to read manifest schema 2: %s", err.Error())
 		}
 	}
 
-	req, err := http.NewRequest(http.MethodPut, url, dataReader)
+	req, err := http.NewRequest(http.MethodPut, url.String(), dataReader)
 	if err != nil {
 		return err
 	}
@@ -533,6 +532,16 @@ func getManifestSchema1Reader(options Options, manifest schema1.Manifest) (io.Re
 	return nil, fmt.Errorf("Not implemented")
 }
 
-func getManifestSchema2Reader(options Options, manifest schema2.DeserializedManifest) (io.Reader, error) {
-	return nil, fmt.Errorf("Not implemented")
+func getManifestSchema2Reader(options Options, manifest schema2.Manifest) (io.Reader, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(manifest)
+	if err != nil {
+		msg := fmt.Sprintf("Unable to encode manifest to bytes")
+		log.Error(msg)
+		return nil, fmt.Errorf(msg)
+	}
+
+	manifestReader := bytes.NewReader(buf.Bytes())
+	return manifestReader, nil
 }
