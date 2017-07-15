@@ -137,10 +137,12 @@ type ImageWithMeta struct {
 
 // ArchiveStream is used during image push
 type ArchiveStream struct {
-	pipeReader *io.PipeReader
-	pipeWriter *io.PipeWriter
-	size       int64
-	digest     string
+	pipeReader    *io.PipeReader
+	pipeWriter    *io.PipeWriter
+	size          int64
+	digest        string
+	layerID       string
+	parentLayerID string
 }
 
 // Pusher contains all "prepared" data needed to push an image
@@ -671,7 +673,7 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 	pusher := ic.Pusher
 
 	// get the leaf layerID from repo cache using the image id
-	layerID := cache.RepositoryCache().GetImageID(id)
+	layerID := cache.RepositoryCache().GetLayerID(id)
 
 	// get the layer (ImageWithMeta) from the layer cache using the layer id
 	layer, err := LayerCache().Get(layerID)
@@ -690,7 +692,10 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 			break
 		}
 
-		pusher.streamMap[layerID] = &ArchiveStream{}
+		pusher.streamMap[layerID] = &ArchiveStream{
+			layerID:       layerID,
+			parentLayerID: layer.Image.Parent,
+		}
 
 		// set the layer to the parent layer
 		layerID := layer.Image.Parent

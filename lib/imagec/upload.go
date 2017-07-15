@@ -63,6 +63,7 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 	for _, layer := range ic.ImageLayers {
 		progress.Update(progressOutput, layer.String(), "Preparing")
 
+		// Check if already uploading
 		if _, present := currTransfer[layer.ID]; present {
 			continue
 		}
@@ -72,7 +73,6 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 		defer upload.Release(watcher)
 		uploads = append(uploads, upload.(*uploadTransfer))
 		currTransfer[layer.ID] = upload.(*uploadTransfer)
-
 	}
 
 	for _, upload := range uploads {
@@ -101,6 +101,9 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 			return u
 		}
 
+		pusher := ic.Pusher
+		as := pusher.streamMap[layer.ID]
+
 		go func() {
 			select {
 			case <-u.Transfer.Done():
@@ -123,7 +126,7 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 			}
 
 			// PutImageBlob will handle retries and backoff
-			err := PushImageBlob(u.Transfer.Context(), ic.Options, reader, progressOutput)
+			err := PushImageBlob(u.Transfer.Context(), ic.Options, as, reader, progressOutput)
 			if err != nil {
 				// log.Errorf("Error pushing image blob for %s/%s: %s", ic.Image, layer.ID, err)
 				return

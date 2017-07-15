@@ -301,7 +301,7 @@ func FetchImageBlob(ctx context.Context, options Options, image *ImageWithMeta, 
 	return diffID, nil
 }
 
-func PushImageBlob(ctx context.Context, options Options, layerReader io.ReadCloser, progressOutput progress.Output) (err error) {
+func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, layerReader io.ReadCloser, progressOutput progress.Output) (err error) {
 	return nil
 }
 
