@@ -16,7 +16,6 @@ package imagec
 
 import (
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
@@ -26,7 +25,10 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/net/context"
 
 	log "github.com/Sirupsen/logrus"
 
@@ -42,8 +44,6 @@ import (
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/reference"
 
-	"sync"
-
 	"github.com/vmware/vic/lib/apiservers/engine/backends/cache"
 	"github.com/vmware/vic/lib/apiservers/portlayer/models"
 	"github.com/vmware/vic/lib/metadata"
@@ -56,7 +56,7 @@ import (
 // ImageC is responsible for pulling docker images from a repository
 type ImageC struct {
 	Options
-	*Pusher
+	Pusher
 
 	// https://raw.githubusercontent.com/docker/docker/master/distribution/pull_v2.go
 	sf             *streamformatter.StreamFormatter
@@ -70,11 +70,14 @@ type ImageC struct {
 }
 
 // NewImageC returns a new instance of ImageC
-func NewImageC(options Options, strfmtr *streamformatter.StreamFormatter) *ImageC {
+func NewImageC(options Options, strfmtr *streamformatter.StreamFormatter, getArchiveReader GetArchiveReader) *ImageC {
 	return &ImageC{
 		Options:        options,
 		sf:             strfmtr,
 		progressOutput: strfmtr.NewProgressOutput(options.Outstream, false),
+		Pusher: Pusher{
+			ArchiveReader: getArchiveReader,
+		},
 	}
 }
 
@@ -151,7 +154,7 @@ type Pusher struct {
 	ArchiveReader GetArchiveReader
 }
 
-type GetArchiveReader func(ctx context.Context, layerID string) (io.ReadCloser, error)
+type GetArchiveReader func(ctx context.Context, layerID, parentLayerID string) (io.ReadCloser, error)
 
 func (i *ImageWithMeta) String() string {
 	return stringid.TruncateID(i.Layer.BlobSum)
@@ -665,9 +668,6 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 		return fmt.Errorf("Could not retrieve image id from repository cache using reference: %s", err)
 	}
 
-	if ic.Pusher == nil {
-		ic.Pusher = &Pusher{}
-	}
 	pusher := ic.Pusher
 
 	// get the leaf layerID from repo cache using the image id
@@ -733,10 +733,6 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 // be determined till the layer tar streams were read and pushed.
 func (ic *ImageC) FinalizeManifest() error {
 	pusher := ic.Pusher
-
-	if pusher == nil {
-		return fmt.Errorf("Nil pusher")
-	}
 
 	var layers []distribution.Descriptor
 	for _, stream := range pusher.streamMap {
@@ -848,7 +844,8 @@ func (p *Pusher) GetReaderForLayer(layerID string) (io.ReadCloser, error) {
 
 		//Initialize an archive stream from the portlayer for the layer
 
-		ar, err := p.ArchiveReader(context.Background(), layerID)
+		// FIXME: Need to get parentID
+		ar, err := p.ArchiveReader(context.Background(), layerID, layerID)
 		if err != nil || ar == nil {
 			return nil, fmt.Errorf("Failed to get reader for layer %s", layerID)
 		}

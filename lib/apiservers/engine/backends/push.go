@@ -1,16 +1,18 @@
 package backends
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	"github.com/vmware/vic/lib/apiservers/engine/backends/cache"
 	"github.com/vmware/vic/lib/imagec"
 	"github.com/vmware/vic/pkg/trace"
+	"github.com/vmware/vic/pkg/vsphere/sys"
 
 	log "github.com/Sirupsen/logrus"
 
@@ -19,6 +21,7 @@ import (
 	eventtypes "github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/reference"
+	vicarchive "github.com/vmware/vic/lib/archive"
 )
 
 // PushImage initiates a push operation on the repository named localName.
@@ -26,7 +29,7 @@ func (i *Image) PushImage(ctx context.Context, image, tag string, metaHeaders ma
 	// return fmt.Errorf("%s does not yet implement image.PushImage", ProductName())
 	defer trace.End(trace.Begin(fmt.Sprintf("%s:%s", image, tag)))
 
-	img, err := cache.ImageCache().Get(image)
+	_, err := cache.ImageCache().Get(image)
 	if err != nil {
 		return ImageNotFoundError(image, tag)
 	}
@@ -107,7 +110,7 @@ func (i *Image) PushImage(ctx context.Context, image, tag string, metaHeaders ma
 
 	log.Infof("-------------The imagecOption:-----------\n %+v", options)
 
-	ic := imagec.NewImageC(options, streamformatter.NewJSONStreamFormatter())
+	ic := imagec.NewImageC(options, streamformatter.NewJSONStreamFormatter(), SimpleArchiveReader)
 	err = ic.PushImage()
 	if err != nil {
 		return err
@@ -119,6 +122,15 @@ func (i *Image) PushImage(ctx context.Context, image, tag string, metaHeaders ma
 	return nil
 }
 
-func SimpleArchiveReader(ctx context.Context, layerID string) (io.ReadCloser, error) {
+// SimpleArchiveReader is a simplified archive reader that imageC can use to get a stream from the portlayer
+// without knowing about the portlayer
+func SimpleArchiveReader(ctx context.Context, layerID, parentLayerID string) (io.ReadCloser, error) {
+	var filterSpec vicarchive.FilterSpec
 
+	host, err := sys.UUID()
+	if err != nil {
+		return nil, err
+	}
+
+	return archiveProxy.ArchiveExportReader(ctx, host, host, layerID, parentLayerID, true, filterSpec)
 }

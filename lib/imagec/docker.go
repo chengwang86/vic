@@ -371,7 +371,7 @@ func FetchImageManifest(ctx context.Context, options Options, schemaVersion int,
 }
 
 // PutImageManifest simply pushes the manifest up to the registry.
-func PutImageManifest(ctx context.Context, pusher *Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
+func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
 	tr := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
