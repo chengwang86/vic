@@ -95,14 +95,12 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 			Transfer: xfer.NewTransfer(),
 		}
 
-		reader, err := ic.Pusher.GetReaderForLayer(layer.ID)
+		aStream, reader, err := ic.Pusher.GetReaderForLayer(layer.ID)
 		if err != nil {
 			u.err = err
 			return u
 		}
-
-		pusher := ic.Pusher
-		as := pusher.streamMap[layer.ID]
+		defer aStream.Close()
 
 		go func() {
 			select {
@@ -126,7 +124,7 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 			}
 
 			// PutImageBlob will handle retries and backoff
-			err := PushImageBlob(u.Transfer.Context(), ic.Options, as, reader, progressOutput)
+			err := PushImageBlob(u.Transfer.Context(), ic.Options, aStream, reader, progressOutput)
 			if err != nil {
 				// log.Errorf("Error pushing image blob for %s/%s: %s", ic.Image, layer.ID, err)
 				return

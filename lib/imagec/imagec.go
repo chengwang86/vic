@@ -15,17 +15,16 @@
 package imagec
 
 import (
-	"compress/gzip"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/context"
@@ -137,8 +136,9 @@ type ImageWithMeta struct {
 
 // ArchiveStream is used during image push
 type ArchiveStream struct {
-	pipeReader    *io.PipeReader
-	pipeWriter    *io.PipeWriter
+	// pipeReader    *io.PipeReader
+	// pipeWriter    *io.PipeWriter
+	layerFile     *os.File
 	size          int64
 	digest        string
 	layerID       string
@@ -147,7 +147,7 @@ type ArchiveStream struct {
 
 // Pusher contains all "prepared" data needed to push an image
 type Pusher struct {
-	pushWg          sync.WaitGroup
+	// pushWg          sync.WaitGroup
 	schema2Manifest schema2.Manifest
 	streamMap       map[string]*ArchiveStream
 
@@ -537,9 +537,6 @@ func (ic *ImageC) PushImage() error {
 		return err
 	}
 
-	// Wait for all layers to complete upload and their streams hashed
-	ic.Pusher.pushWg.Wait()
-
 	if err := ic.FinalizeManifest(); err != nil {
 		return err
 	}
@@ -831,69 +828,141 @@ func (ic *ImageC) dockerImageFromVicImage(images []*ImageWithMeta) (*docker.Imag
 
 // GetReaderForLayer returns a io.ReadCloser for the archive stream connection to the
 //	portlayer
-func (p *Pusher) GetReaderForLayer(layerID string) (io.ReadCloser, error) {
+// func (p *Pusher) GetReaderForLayer(layerID string) (io.ReadCloser, error) {
+// 	stream, ok := p.streamMap[layerID]
+// 	if ok && stream != nil {
+// 		return nil, fmt.Errorf("Stream for layer %s already in use", layerID)
+// 	}
+
+// 	if stream == nil {
+// 		stream = &ArchiveStream{}
+// 		p.streamMap[layerID] = stream
+// 	}
+
+// 	if stream.pipeReader == nil {
+// 		if p.ArchiveReader == nil {
+// 			return nil, fmt.Errorf("No archive reader function provided to imageC")
+// 		}
+
+// 		//Initialize an archive stream from the portlayer for the layer
+// 		ar, err := p.ArchiveReader(context.Background(), layerID, layerID)
+// 		if err != nil || ar == nil {
+// 			return nil, fmt.Errorf("Failed to get reader for layer %s", layerID)
+// 		}
+
+// 		f, err := os.Create("/tmp/dat2")
+
+// 		stream.pipeReader, stream.pipeWriter = io.Pipe()
+// 		go func() {
+// 			p.pushWg.Add(1)
+
+// 			defer ar.Close()
+// 			defer stream.pipeWriter.Close()
+
+// 			gzipReader, err := gzip.NewReader(ar)
+// 			if err != nil {
+// 				return
+// 			}
+
+// 			h := sha256.New()
+// 			mw := io.MultiWriter(stream.pipeWriter, h)
+// 			written, err := io.Copy(mw, gzipReader)
+// 			if err != nil {
+// 				switch err {
+// 				//FIXME:  Add error cases
+// 				}
+// 			}
+
+// 			stream.size = written
+// 			stream.digest = fmt.Sprintf("%x", h.Sum(nil))
+
+// 			p.pushWg.Done()
+// 		}()
+// 	} else {
+// 		// If stream.reader != nil then assume it's in use
+// 		return nil, fmt.Errorf("Stream for layer %s already in use", layerID)
+// 	}
+
+// 	return stream.pipeReader, nil
+// }
+
+// GetReaderForLayer returns a io.ReadCloser for the data from the archive stream.  The
+// archive stream reads the layer data from the portlayer.  It is written to a temp file
+// in order to obtain the digest before actual upload.
+func (p *Pusher) GetReaderForLayer(layerID string) (*ArchiveStream, io.ReadCloser, error) {
 	stream, ok := p.streamMap[layerID]
 	if ok && stream != nil {
-		return nil, fmt.Errorf("Stream for layer %s already in use", layerID)
+		return nil, nil, fmt.Errorf("Stream for layer %s already in use", layerID)
 	}
 
 	if stream == nil {
 		stream = &ArchiveStream{}
-		p.streamMap[layerID] = stream
 	}
 
-	if stream.pipeReader == nil {
-		if p.ArchiveReader == nil {
-			return nil, fmt.Errorf("No archive reader function provided to imageC")
-		}
-
-		//Initialize an archive stream from the portlayer for the layer
-
-		// FIXME: Need to get parentID
-		ar, err := p.ArchiveReader(context.Background(), layerID, layerID)
-		if err != nil || ar == nil {
-			return nil, fmt.Errorf("Failed to get reader for layer %s", layerID)
-		}
-
-		stream.pipeReader, stream.pipeWriter = io.Pipe()
-		go func() {
-			p.pushWg.Add(1)
-
-			defer ar.Close()
-			defer stream.pipeWriter.Close()
-
-			gzipReader, err := gzip.NewReader(ar)
-			if err != nil {
-				return
-			}
-
-			h := sha256.New()
-			mw := io.MultiWriter(stream.pipeWriter, h)
-			written, err := io.Copy(mw, gzipReader)
-			if err != nil {
-				switch err {
-				//FIXME:  Add error cases
-				}
-			}
-
-			stream.size = written
-			stream.digest = fmt.Sprintf("%x", h.Sum(nil))
-
-			p.pushWg.Done()
-		}()
-	} else {
-		// If stream.reader != nil then assume it's in use
-		return nil, fmt.Errorf("Stream for layer %s already in use", layerID)
+	// Check if we have a function to retrieve the stream
+	if p.ArchiveReader == nil {
+		return nil, nil, fmt.Errorf("No archive reader function provided to ImageC")
 	}
 
-	return stream.pipeReader, nil
+	defer func() {
+		if stream.layerFile != nil {
+			// Must have succeeded
+			p.streamMap[layerID] = stream
+		}
+	}()
+
+	//Initialize an archive stream from the portlayer for the layer
+	ar, err := p.ArchiveReader(context.Background(), layerID, p.streamMap[layerID].parentLayerID)
+	if err != nil || ar == nil {
+		return nil, nil, fmt.Errorf("Failed to get reader for layer %s", layerID)
+	}
+	defer ar.Close()
+
+	f, err := ioutil.TempFile("", "")
+	if err != nil {
+		return nil, nil, fmt.Errorf("Failed to create tmp file: %s", err.Error())
+	}
+
+	h := sha256.New()
+
+	mw := io.MultiWriter(f, h)
+	written, err := io.Copy(mw, ar)
+	if err == nil {
+		_, err = f.Seek(0, 0)
+	}
+
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, nil, fmt.Errorf("Fail to write layer stream to tmpfile: %s", err.Error())
+	}
+
+	stream.layerFile = f
+	stream.size = written
+	stream.digest = fmt.Sprintf("%x", h.Sum(nil))
+
+	return stream, f, nil
+}
+
+// Close closes and clears out the archive reader
+func (a *ArchiveStream) Close() {
+	if a.layerFile == nil {
+		return
+	}
+
+	a.layerFile.Close()
+	os.Remove(a.layerFile.Name())
+	a.size = 0
+	a.digest = ""
+	a.layerID = ""
+	a.parentLayerID = ""
 }
 
 // CloseAll closes all active streams and clears out the streamMap
-func (p *Pusher) CloseAll() {
-	for _, stream := range p.streamMap {
-		stream.pipeReader.Close()
-	}
+// func (p *Pusher) CloseAll() {
+// 	for _, stream := range p.streamMap {
+// 		stream.pipeReader.Close()
+// 	}
 
-	p.streamMap = nil
-}
+// 	p.streamMap = nil
+// }
