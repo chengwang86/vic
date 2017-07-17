@@ -41,6 +41,7 @@ import (
 	"github.com/docker/docker/reference"
 	"github.com/docker/libtrust"
 
+	"github.com/docker/docker/pkg/stringid"
 	urlfetcher "github.com/vmware/vic/pkg/fetcher"
 	registryutils "github.com/vmware/vic/pkg/registry"
 	"github.com/vmware/vic/pkg/trace"
@@ -143,7 +144,7 @@ func LearnAuthURL(options Options) (*url.URL, error) {
 }
 
 // FetchToken fetches the OAuth token from OAuth endpoint
-func FetchToken(ctx context.Context, options Options, url *url.URL, progressOutput progress.Output) (*urlfetcher.Token, error) {
+func FetchToken(options Options, url *url.URL) (*urlfetcher.Token, error) {
 	defer trace.End(trace.Begin(url.String()))
 
 	log.Debugf("URL: %s", url)
@@ -301,10 +302,6 @@ func FetchImageBlob(ctx context.Context, options Options, image *ImageWithMeta, 
 	log.Infof("Layer %s blobsum, diff id = (%s, %s)", id, layer, diffID)
 
 	return diffID, nil
-}
-
-func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, layerReader io.ReadCloser, progressOutput progress.Output) (err error) {
-	return nil
 }
 
 // tagOrDigest returns an image's digest if it's pulled by digest, or its tag
@@ -546,4 +543,313 @@ func getManifestSchema2Reader(options Options, manifest schema2.Manifest) (io.Re
 
 	manifestReader := bytes.NewReader(buf.Bytes())
 	return manifestReader, nil
+}
+
+func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, layerReader io.ReadCloser, po progress.Output) (err error) {
+	defer trace.End(trace.Begin(options.Image))
+
+	// input arguments from caller:
+	// diffID: the sha256sum of decompressed layer
+	//diffID := "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
+	layerID := ShortID(as.layerID)
+
+	// The workflow: (https://docs.docker.com/registry/spec/api/#pushing-an-image)
+	// 1. check if layer already exists
+	// 2. try cross-repo-blob-mount
+	// 3. if layer doesn't exist and cross-repo-blob-mount fails, obtain an upload url from the registry
+	// 4. upload the layer to the registry
+	// 5. if upload fails, cancel the upload process
+	// TODO: skip foreign layers before checking layer existence
+
+	log.Debugf("The registry in use is: %s", options.Registry)
+	registryUrl, err := url.Parse(options.Registry)
+	if err != nil {
+		return err
+	}
+
+	transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		Token:              options.Token,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+	})
+
+	// TODO: ask Loc to pass the digest as the input
+	pushDigest := as.digest
+
+	log.Debugf("Checking for presence of layer %s (%s) in %s", layerID, pushDigest, options.Image)
+	exist, err := transporter.CheckLayerExistence(ctx, options.Image, pushDigest, registryUrl, po)
+	if err != nil {
+		return fmt.Errorf("failed to check for presence of layer %s (%s) in %s: %s", layerID, pushDigest, options.Image, err)
+	}
+	if exist {
+		progress.Update(po, layerID, "Layer already exists")
+		return nil
+	}
+
+	// obtain a list of repositories for cross repo blob mount
+	repoList, err := ObtainRepoList(options, po)
+	if err != nil {
+		log.Errorf("Failed to fetch repo list: %s", err)
+	} else {
+		if repoList != nil {
+			mounted, err := CrossRepoBlobMount(ctx, layerID, pushDigest, options, repoList, po)
+			if err != nil {
+				return fmt.Errorf("failed during CrossRepoBlobMount: %s", err)
+			}
+			if mounted {
+				progress.Update(po, layerID, "Layer already mounted")
+				return nil
+			}
+		}
+	}
+
+	// obtain upload url to start upload process
+	// which would require obtaining a list of the repositories that the current user has access to.
+	// See https://docs.docker.com/registry/spec/api/#pushing-an-image
+	uploadURL, err := transporter.ObtainUploadUrl(ctx, registryUrl, options.Image, po)
+	if err != nil {
+		return err
+	}
+	log.Infof("The upload url is: %s", uploadURL)
+
+	defer func() {
+		if err != nil {
+			if err2 := transporter.CancelUpload(ctx, uploadURL, po); err2 != nil {
+				log.Errorf("Failed during CancelUpload: %s", err2)
+			}
+		}
+	}()
+
+	if err = transporter.UploadLayer(ctx, pushDigest, uploadURL, layerReader, po); err != nil {
+		return err
+	}
+	progress.Update(po, layerID, "Pushed")
+
+	return nil
+}
+
+func CrossRepoBlobMount(ctx context.Context, layerID, digest string, options Options, repoList []string, po progress.Output) (bool, error) {
+	defer trace.End(trace.Begin(options.Image))
+
+	//// mock diffID. This should be replaced by info from upload manager. It is only needed for logging
+	//diffID := "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
+	//// this is needed for updating the progress output
+	//layerID := "layerID"
+
+	var (
+		mounted  bool
+		authURL  *url.URL
+		newToken *urlfetcher.Token
+	)
+
+	registry, err := url.Parse(options.Registry)
+	if err != nil {
+		return false, err
+	}
+
+	for _, repo := range repoList {
+		log.Debugf("Attempting to mount layer %s (%s) from %s", layerID, digest, repo)
+
+		// first obtain the auth url and token
+		composedUrl, _ := url.Parse(options.Registry)
+		composedUrl.Path = path.Join(composedUrl.Path, options.Image, "blobs/uploads")
+		composedUrl.Path += "/"
+
+		q := composedUrl.Query()
+		q.Add("mount", digest)
+		q.Add("from", repo)
+		composedUrl.RawQuery = q.Encode()
+
+		log.Debugf("The url for MountBlobToRepo is: %s", composedUrl)
+
+		// POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repository name>
+		// Content-Length: 0
+		reqHdrs := &http.Header{
+			"Content-Length": {"0"},
+		}
+
+		transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+			Timeout:            options.Timeout,
+			Username:           options.Username,
+			Password:           options.Password,
+			InsecureSkipVerify: options.InsecureSkipVerify,
+			RootCAs:            options.RegistryCAs,
+		})
+
+		hdr, err := transporter.Post(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, po)
+
+		if err != nil {
+			return false, err
+		}
+
+		if transporter.IsStatusUnauthorized() {
+			authURL, err = transporter.ExtractOAuthURL(hdr.Get("www-authenticate"), composedUrl)
+			if err != nil {
+				return false, err
+			}
+		}
+
+		log.Debugf("The url for authenticating CrossRepoBlobMount is: %+v", authURL)
+
+		// Get the OAuth token - if only we have a URL
+		if authURL != nil {
+			newToken, err = FetchToken(options, authURL)
+			if err != nil {
+				log.Errorf("Failed to fetch OAuth token: %s", err)
+				return false, err
+			}
+		}
+
+		newTransporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+			Timeout:            options.Timeout,
+			Username:           options.Username,
+			Password:           options.Password,
+			Token:              newToken,
+			InsecureSkipVerify: options.InsecureSkipVerify,
+			RootCAs:            options.RegistryCAs,
+		})
+
+		// if mount fails, the registry will fall back to the standard upload behavior
+		// and return a 202 Accepted with the upload URL in the Location header
+		mounted, _, err = newTransporter.MountBlobToRepo(ctx, registry, digest, options.Image, repo, po)
+		if err != nil {
+			log.Errorf("Mount layer to repo %s failed: %s", repo, err)
+		}
+		if mounted {
+			progress.Updatef(po, layerID, "Mounted from %s", repo)
+			break
+		}
+	}
+
+	if mounted {
+		return true, nil
+	}
+
+	log.Debugf("Layer cannot be mounted")
+	return false, nil
+}
+
+// LearnAuthURLForPush returns the URL of the OAuth endpoint
+func LearnAuthURLForPush(options Options, po progress.Output) (*url.URL, error) {
+	defer trace.End(trace.Begin(options.Reference.String()))
+
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return nil, err
+	}
+
+	url.Path = path.Join(url.Path, options.Image, "blobs", "uploads")
+	url.Path += "/"
+	log.Debugf("LearnAuthURLForPush URL: %s", url)
+
+	transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+	})
+
+	// We expect docker registry to return a 401 to us - with a WWW-Authenticate header
+	// We parse that header and learn the OAuth endpoint to fetch OAuth token.
+	hdr, err := transporter.Post(ctx, url, bytes.NewReader([]byte("")), nil, po)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err == nil && transporter.IsStatusUnauthorized() {
+		return transporter.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
+	}
+
+	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), url)
+}
+
+func ObtainRepoList(options Options, po progress.Output) ([]string, error) {
+	defer trace.End(trace.Begin(options.Reference.String()))
+
+	var token *urlfetcher.Token
+
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return nil, err
+	}
+
+	url.Path = path.Join(url.Path, "_catalog")
+	log.Debugf("obtainRepolist URL: %s", url)
+
+	transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+	})
+
+	hdr, _, err := transporter.Get(ctx, url, nil, po)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch auth url for ObtainRepoList: %s", err)
+	}
+
+	if transporter.IsStatusUnauthorized() {
+		oauthUrl, err := transporter.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extact oauth url: %s", err)
+		}
+
+		token, err = FetchToken(options, oauthUrl)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch OAuth token: %s", err)
+		}
+	}
+
+	newTransporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+		Token:              token,
+	})
+
+	_, rdr, err := newTransporter.Get(ctx, url, nil, po)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch repo list: %s", err)
+	}
+	defer rdr.Close()
+
+	if newTransporter.IsStatusOK() {
+		log.Debugf("ObtainRepoList: %+v", rdr)
+
+		out := bytes.NewBuffer(nil)
+
+		// Stream into it
+		_, err = io.Copy(out, rdr)
+		if err != nil {
+			return nil, err
+		}
+
+		var dat map[string][]string
+
+		if err = json.Unmarshal(out.Bytes(), &dat); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal repo list: %s", err)
+		}
+
+		log.Debugf("The repo list is %+v", dat["repositories"])
+		return dat["repositories"], nil
+	}
+
+	if newTransporter.IsStatusUnauthorized() {
+		// it is possible that the current user does not have enough permission, so return nil
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", newTransporter.Status(), url)
+}
+
+func ShortID(id string) string {
+	return stringid.TruncateID(id)
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/docker/docker/reference"
 	"github.com/pkg/profile"
 
+	"github.com/vmware/vic/lib/apiservers/engine/backends"
 	"github.com/vmware/vic/lib/imagec"
 	"github.com/vmware/vic/pkg/version"
 )
@@ -165,12 +166,18 @@ func main() {
 
 		options.Outstream = os.Stdout
 
-		ic := imagec.NewImageC(options, streamformatter.NewJSONStreamFormatter())
+		ic := imagec.NewImageC(options, streamformatter.NewJSONStreamFormatter(), backends.SimpleArchiveReader)
 		if err := ic.PullImage(); err != nil {
 			log.Fatalf("Pulling image failed due to %s\n", err)
 		}
 	} else if imageCOptions.operation == PushImage {
-		log.Errorf("The operation '%s' is not implemented\n", PushImage)
+		options := imageCOptions.options
+		options.Outstream = os.Stdout
+
+		ic := imagec.NewImageC(options, streamformatter.NewJSONStreamFormatter(), backends.SimpleArchiveReader)
+		if err := ic.PushImage(); err != nil {
+			log.Fatalf("Pushing image failed due to %s\n", err)
+		}
 	} else {
 		log.Errorf("The operation '%s' is not valid\n", imageCOptions.operation)
 	}

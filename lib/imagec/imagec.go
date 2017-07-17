@@ -51,6 +51,11 @@ import (
 	"github.com/vmware/vic/pkg/vsphere/sys"
 )
 
+const (
+	PushImage = "pushImage"
+	PullImage = "pullImage"
+)
+
 // ImageC is responsible for pulling docker images from a repository
 type ImageC struct {
 	Options
@@ -486,7 +491,7 @@ func (ic *ImageC) PullImage() error {
 	defer cancel()
 
 	// Authenticate, get URL, get token
-	if err := ic.prepareTransfer(ctx); err != nil {
+	if err := ic.prepareTransfer(ctx, PullImage); err != nil {
 		return err
 	}
 
@@ -522,9 +527,9 @@ func (ic *ImageC) PushImage() error {
 	defer cancel()
 
 	// Authenticate, get URL, get token
-	// if err := ic.prepareTransfer(ctx); err != nil {
-	// 	return err
-	// }
+	if err := ic.prepareTransfer(ctx, PushImage); err != nil {
+		return err
+	}
 
 	// Output message
 	progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
@@ -553,7 +558,7 @@ func (ic *ImageC) PushImage() error {
 }
 
 // prepareTransfer Looks up URLs and fetch auth token
-func (ic *ImageC) prepareTransfer(ctx context.Context) error {
+func (ic *ImageC) prepareTransfer(ctx context.Context, imageOperation string) error {
 
 	// Parse the -reference parameter
 	ic.ParseReference()
@@ -596,7 +601,15 @@ func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 	}
 
 	// Get the URL of the OAuth endpoint
-	url, err := LearnAuthURL(ic.Options)
+	var url *url.URL
+	if imageOperation == PushImage {
+		url, err = LearnAuthURLForPush(ic.Options, ic.progressOutput)
+	} else if imageOperation == PullImage {
+		url, err = LearnAuthURL(ic.Options)
+	} else {
+		return fmt.Errorf("invlid image operation: %s", imageOperation)
+	}
+
 	if err != nil {
 		log.Infof(err.Error())
 		switch err := err.(type) {
@@ -609,7 +622,7 @@ func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 
 	// Get the OAuth token - if only we have a URL
 	if url != nil {
-		token, err := FetchToken(ctx, ic.Options, url, ic.progressOutput)
+		token, err := FetchToken(ic.Options, url)
 		if err != nil {
 			log.Errorf("Failed to fetch OAuth token: %s", err)
 			return err
