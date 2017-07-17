@@ -783,6 +783,9 @@ func (ic *ImageC) FinalizeManifest() error {
 
 	var layers []distribution.Descriptor
 	for _, stream := range pusher.streamMap {
+
+		log.Debugf("----push.streamMap - stream: %+v", stream)
+
 		var layer distribution.Descriptor
 
 		layer.Digest = digest.Digest(stream.digest)
@@ -795,19 +798,21 @@ func (ic *ImageC) FinalizeManifest() error {
 	pusher.PushManifest.Layers = layers
 
 	log.Infof("Final manifest = %#v", ic.Pusher.PushManifest)
-
 	return nil
 }
 
 func (ic *ImageC) pushManifest(ctx context.Context) error {
-	if ic.ImageManifestSchema2 != nil {
-		if err := PutImageManifest(ctx, ic.Pusher, ic.Options, 2, ic.progressOutput); err != nil {
+	//if ic.ImageManifestSchema2 != nil {
+	//	if err := PutImageManifest(ctx, ic.Pusher, ic.Options, 2, ic.progressOutput); err != nil {
+	//		return err
+	//	}
+	//} else if ic.ImageManifestSchema1 != nil {
+	//	return fmt.Errorf("Cannot push image manifest schema 1")
+	//} else {
+	//	return fmt.Errorf("attempt to push manifest when non exist")
+	//}
+	if err := PutImageManifest(ctx, ic.Pusher, ic.Options, 2, ic.progressOutput); err != nil {
 			return err
-		}
-	} else if ic.ImageManifestSchema1 != nil {
-		return fmt.Errorf("Cannot push image manifest schema 1")
-	} else {
-		return fmt.Errorf("attempt to push manifest when non exist")
 	}
 
 	return nil

@@ -19,7 +19,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
@@ -369,55 +368,56 @@ func FetchImageManifest(ctx context.Context, options Options, schemaVersion int,
 	return nil, "", fmt.Errorf("Unknown schema version %d requested!", schemaVersion)
 }
 
-// PutImageManifest simply pushes the manifest up to the registry.
-func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
-	tr := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: options.InsecureSkipVerify,
-			RootCAs:            options.RegistryCAs,
-		},
-	}
-	client := &http.Client{Transport: tr}
-
-	// Create manifest push URL
-	url, err := url.Parse(options.Registry)
-	if err != nil {
-		return err
-	}
-
-	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
-	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
-	log.Debugf("URL: %s", url)
-
-	// Add content type headers
-	reqHeaders := make(http.Header)
-	var dataReader io.Reader
-
-	switch schemaVersion {
-	case 1: //schema 1, signed manifest
-		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
-		log.Errorf("Schema 1 push not supported")
-	case 2: //schema 2
-		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
-		dataReader, err = getManifestSchema2Reader(options, pusher.PushManifest)
-		if err != nil {
-			log.Errorf("Failed to read manifest schema 2: %s", err.Error())
-		}
-	}
-
-	req, err := http.NewRequest(http.MethodPut, url.String(), dataReader)
-	if err != nil {
-		return err
-	}
-
-	_, err = client.Do(req)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
+//
+//// PutImageManifest simply pushes the manifest up to the registry.
+//func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
+//	tr := &http.Transport{
+//		Proxy: http.ProxyFromEnvironment,
+//		TLSClientConfig: &tls.Config{
+//			InsecureSkipVerify: options.InsecureSkipVerify,
+//			RootCAs:            options.RegistryCAs,
+//		},
+//	}
+//	client := &http.Client{Transport: tr}
+//
+//	// Create manifest push URL
+//	url, err := url.Parse(options.Registry)
+//	if err != nil {
+//		return err
+//	}
+//
+//	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
+//	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
+//	log.Debugf("URL: %s", url)
+//
+//	// Add content type headers
+//	reqHeaders := make(http.Header)
+//	var dataReader io.Reader
+//
+//	switch schemaVersion {
+//	case 1: //schema 1, signed manifest
+//		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
+//		log.Errorf("Schema 1 push not supported")
+//	case 2: //schema 2
+//		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
+//		dataReader, err = getManifestSchema2Reader(options, pusher.PushManifest)
+//		if err != nil {
+//			log.Errorf("Failed to read manifest schema 2: %s", err.Error())
+//		}
+//	}
+//
+//	req, err := http.NewRequest(http.MethodPut, url.String(), dataReader)
+//	if err != nil {
+//		return err
+//	}
+//
+//	_, err = client.Do(req)
+//	if err != nil {
+//		return err
+//	}
+//
+//	return nil
+//}
 
 // decodeManifestSchema1() reads a manifest schema 1 and creates an imageC
 // defined Manifest structure and returns the digest of the manifest as a string.
@@ -848,6 +848,57 @@ func ObtainRepoList(options Options, po progress.Output) ([]string, error) {
 	}
 
 	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", newTransporter.Status(), url)
+}
+
+// PutImageManifest simply pushes the manifest up to the registry.
+func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {
+
+	// Create manifest push URL
+	url, err := url.Parse(options.Registry)
+	if err != nil {
+		return err
+	}
+
+	tagOrDigest := tagOrDigest(options.Reference, options.Tag)
+	url.Path = path.Join(url.Path, options.Image, "manifests", tagOrDigest)
+	log.Debugf("URL for PutIamgeManifest: %s", url)
+
+	// Add content type headers
+	reqHeaders := make(http.Header)
+	var dataReader io.Reader
+
+	switch schemaVersion {
+	case 1: //schema 1, signed manifest
+		reqHeaders.Add("Content-Type", schema1.MediaTypeManifest)
+		log.Errorf("Schema 1 push not supported")
+	case 2: //schema 2
+		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
+		dataReader, err = getManifestSchema2Reader(options, pusher.PushManifest)
+		if err != nil {
+			log.Errorf("Failed to read manifest schema 2: %s", err.Error())
+		}
+	}
+
+	Transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+		Token:              options.Token,
+	})
+
+	hdr, err := Transporter.Put(ctx, url, dataReader, &reqHeaders, progressOutput)
+	log.Debugf("The returned statuscode is: %s", Transporter.Status())
+	log.Debugf("The returned http.head is: %+v", hdr)
+
+	if err != nil {
+		return fmt.Errorf("failed to upload image manifest: %s", err)
+	}
+
+	progress.Message(progressOutput, tagOrDigest, "Digest: (sha256:ImageDigest) size: sizeOfManifest")
+
+	return nil
 }
 
 func ShortID(id string) string {
