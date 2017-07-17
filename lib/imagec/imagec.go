@@ -523,7 +523,7 @@ func (ic *ImageC) PushImage() error {
 	}
 
 	// Get the URL of the OAuth endpoint
-	url, err := LearnAuthURLForPush(ic.Options)
+	url, err := LearnAuthURLForPush(ic.Options, ic.progressOutput)
 	if err != nil {
 		log.Infof(err.Error())
 		return fmt.Errorf("Failed to obtain OAuth endpoint: %s", err)
@@ -533,7 +533,7 @@ func (ic *ImageC) PushImage() error {
 
 	// Get the OAuth token - if only we have a URL
 	if url != nil {
-		token, err := FetchToken(ctx, ic.Options, url, ic.progressOutput)
+		token, err := FetchToken(ic.Options, url)
 		if err != nil {
 			log.Errorf("Failed to fetch OAuth token: %s", err)
 			return err
@@ -541,10 +541,9 @@ func (ic *ImageC) PushImage() error {
 		ic.Token = token
 	}
 
-
-	//// Output message
+	// Output message
 	//tagOrDigest := tagOrDigest(ic.Reference, ic.Tag)
-	//progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
+	progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
 	//
 	//// Create Image and manifest
 	//
@@ -626,7 +625,7 @@ func (ic *ImageC) prepareTransfer(ctx context.Context) error {
 
 	// Get the OAuth token - if only we have a URL
 	if url != nil {
-		token, err := FetchToken(ctx, ic.Options, url, ic.progressOutput)
+		token, err := FetchToken(ic.Options, url)
 		if err != nil {
 			log.Errorf("Failed to fetch OAuth token: %s", err)
 			return err

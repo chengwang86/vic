@@ -18,10 +18,12 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"time"
 
 	"crypto/tls"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/docker/docker/pkg/progress"
 
 	"fmt"
 	"io"
@@ -35,28 +37,37 @@ import (
 	"golang.org/x/net/context/ctxhttp"
 )
 
-// Pusher interface
-type Pusher interface {
-	Push(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, operation string) (http.Header, error)
+const maxTransportAttempts = 5
+
+type Transporter interface {
+	Put(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, po progress.Output, ids ...string) (http.Header, error)
+	Post(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, po progress.Output, ids ...string) (http.Header, error)
+	Delete(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error)
+	Head(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error)
+	Get(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, io.ReadCloser, error)
+
 	IsStatusUnauthorized() bool
 	IsStatusOK() bool
 	IsStatusNotFound() bool
 	IsStatusAccepted() bool
 	IsStatusCreated() bool
 	IsStatusNoContent() bool
+	IsStatusBadGateway() bool
+	IsStatusServiceUnavailable() bool
+	IsStatusGatewayTimeout() bool
 	Status() int
 
 	ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error)
-	CompletedUpload(ctx context.Context, digest, uploadUrl string) error
-	UploadLayer(ctx context.Context, digest, uploadUrl, size string, layer io.Reader) error
-	CancelUpload(ctx context.Context, uploadUrl string) error
-	ObtainUploadUrl(ctx context.Context, registry *url.URL, image string) (string, error)
-	CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL) (bool, error)
-	MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string) (bool, string, error)
+	CompletedUpload(ctx context.Context, digest, uploadUrl string, po progress.Output) error
+	UploadLayer(ctx context.Context, digest, uploadUrl string, layer io.Reader, po progress.Output, ids ...string) error
+	CancelUpload(ctx context.Context, uploadUrl string, po progress.Output) error
+	ObtainUploadUrl(ctx context.Context, registry *url.URL, image string, po progress.Output) (string, error)
+	CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL, po progress.Output) (bool, error)
+	MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string, po progress.Output) (bool, string, error)
 }
 
 // URLPusher struct
-type URLPusher struct {
+type URLTransporter struct {
 	client *http.Client
 
 	OAuthEndpoint *url.URL
@@ -67,7 +78,7 @@ type URLPusher struct {
 }
 
 // NewURLFetcher creates a new URLFetcher
-func NewURLPusher(options Options) Pusher {
+func NewURLTransporter(options Options) Transporter {
 	/* #nosec */
 	tr := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
@@ -78,20 +89,40 @@ func NewURLPusher(options Options) Pusher {
 	}
 	client := &http.Client{Transport: tr}
 
-	return &URLPusher{
+	return &URLTransporter{
 		client:  client,
 		options: options,
 	}
 }
 
-// Push pushes content from local cache or stream to a url
-//	hdrs is optional.
-func (u *URLPusher) Push(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, operation string) (http.Header, error) {
-	defer trace.End(trace.Begin(operation + " " + url.Path))
+func (u *URLTransporter) Put(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, po progress.Output, ids ...string) (http.Header, error) {
+	hdr, _, err := u.requestWithRetry(ctx, url, body, reqHdrs, "PUT", po)
+	return hdr, err
+}
 
+func (u *URLTransporter) Post(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, po progress.Output, ids ...string) (http.Header, error) {
+	hdr, _, err := u.requestWithRetry(ctx, url, body, reqHdrs, "POST", po)
+	return hdr, err
+}
+
+func (u *URLTransporter) Delete(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error) {
+	hdr, _, err := u.requestWithRetry(ctx, url, nil, reqHdrs, "DELETE", po)
+	return hdr, err
+}
+
+func (u *URLTransporter) Head(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error) {
+	hdr, _, err :=  u.requestWithRetry(ctx, url, nil, reqHdrs, "HEAD", po)
+	return hdr, err
+}
+
+func (u *URLTransporter) Get(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, io.ReadCloser, error) {
+	return u.requestWithRetry(ctx, url, nil, reqHdrs, "GET", po)
+}
+
+func (u *URLTransporter) request(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, operation string, po progress.Output) (http.Header, io.ReadCloser, error) {
 	req, err := http.NewRequest(operation, url.String(), body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	u.setBasicAuth(req)
@@ -111,12 +142,12 @@ func (u *URLPusher) Push(ctx context.Context, url *url.URL, body io.Reader, reqH
 
 	res, err := ctxhttp.Do(ctx, u.client, req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	defer res.Body.Close()
 
-	log.Debugf("URLPusher.push() - statuscode: %d, body: %#v, header: %#v", res.StatusCode, res.Body, res.Header)
+	log.Debugf("URLTransporter.request() - statuscode: %d, body: %#v, header: %#v", res.StatusCode, res.Body, res.Header)
 
 	u.StatusCode = res.StatusCode
 
@@ -124,70 +155,161 @@ func (u *URLPusher) Push(ctx context.Context, url *url.URL, body io.Reader, reqH
 		// this is the case when fetching the auth token
 		hdr := res.Header.Get("www-authenticate")
 		if hdr == "" {
-			return nil, fmt.Errorf("www-authenticate header is missing")
+			return nil, nil, DoNotRetry{Err: fmt.Errorf("www-authenticate header is missing")}
 		}
-		return res.Header, nil
+		return res.Header, nil, nil
 	}
 
 	if u.IsStatusUnauthorized() {
 		hdr := res.Header.Get("www-authenticate")
-		return nil, fmt.Errorf("unauthorized: %s", hdr)
+		return nil, nil, DoNotRetry{Err: fmt.Errorf("unauthorized: %s", hdr)}
 	}
 
-	return res.Header, nil
+	if u.IsStatusBadGateway() || u.IsStatusGatewayTimeout() || u.IsStatusServiceUnavailable() {
+		return nil, nil, RetryOnErr{Err: fmt.Errorf("Network failure: statuscode: %d", res.StatusCode)}
+	}
+
+	if u.IsStatusOK() || u.IsStatusCreated() || u.IsStatusNoContent() || u.IsStatusAccepted() || u.IsStatusNotFound() {
+		return res.Header, res.Body, nil
+	}
+
+	return nil, nil, DoNotRetry{Err: fmt.Errorf("Unexpected http code: %d, URL: %s", u.StatusCode, url)}
+}
+
+// pushes content from local cache or stream to a url
+func (u *URLTransporter) requestWithRetry(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, operation string, po progress.Output, ids ...string) (http.Header, io.ReadCloser, error) {
+	defer trace.End(trace.Begin(operation + " " + url.Path))
+
+	// extract ID from ids. Existence of an ID enables progress reporting
+	ID := ""
+	if len(ids) > 0 {
+		ID = ids[0]
+	}
+
+	// ctx
+	ctx, cancel := context.WithTimeout(context.Background(), u.options.Timeout)
+	defer cancel()
+
+	var retries int
+
+	for {
+		hdr, bdr, err := u.request(ctx, url, body, reqHdrs, operation, po)
+		if err == nil {
+			return hdr, bdr, nil
+		}
+
+		// If an error was returned because the context was cancelled, we shouldn't retry.
+		select {
+		case <-ctx.Done():
+			return nil, nil, fmt.Errorf("cancelled during transporting")
+		default:
+		}
+
+		retries++
+		// give up if we reached maxDownloadAttempts
+		if retries == maxTransportAttempts {
+			log.Debugf("Hit max download attempts. Failed: %v", err)
+			return nil, nil, err
+		}
+
+		switch err := err.(type) {
+		case DoNotRetry:
+			log.Debugf("Error: %s", err.Error())
+			return nil, nil, err
+		}
+
+		// retry downloading again
+		log.Debugf("Transporting failed, retrying: %v", err)
+
+		delay := retries * 5
+		ticker := time.NewTicker(time.Second)
+
+	selectLoop:
+		for {
+			// Do not report progress back if ID is empty
+			if ID != "" && po != nil {
+				progress.Updatef(po, ID, "Retrying in %d second%s", delay, (map[bool]string{true: "s"})[delay != 1])
+			}
+
+			select {
+			case <-ticker.C:
+				delay--
+				if delay == 0 {
+					ticker.Stop()
+					break selectLoop
+				}
+			case <-ctx.Done():
+				ticker.Stop()
+				return nil, nil, fmt.Errorf("cancelled during retry delay")
+			}
+		}
+	}
+
 }
 
 // IsStatusUnauthorized returns true if status code is StatusUnauthorized
-func (u *URLPusher) IsStatusUnauthorized() bool {
+func (u *URLTransporter) IsStatusUnauthorized() bool {
 	return u.StatusCode == http.StatusUnauthorized
 }
 
 // IsStatusOK returns true if status code is StatusOK
-func (u *URLPusher) IsStatusOK() bool {
+func (u *URLTransporter) IsStatusOK() bool {
 	return u.StatusCode == http.StatusOK
 }
 
 // IsStatusNotFound returns true if status code is StatusNotFound
-func (u *URLPusher) IsStatusNotFound() bool {
+func (u *URLTransporter) IsStatusNotFound() bool {
 	return u.StatusCode == http.StatusNotFound
 }
 
-func (u *URLPusher) IsStatusAccepted() bool {
+func (u *URLTransporter) IsStatusAccepted() bool {
 	return u.StatusCode == http.StatusAccepted
 }
 
-func (u *URLPusher) IsStatusCreated() bool {
+func (u *URLTransporter) IsStatusCreated() bool {
 	return u.StatusCode == http.StatusCreated
 }
 
-func (u *URLPusher) IsStatusNoContent() bool {
+func (u *URLTransporter) IsStatusNoContent() bool {
 	return u.StatusCode == http.StatusNoContent
+}
+
+func (u *URLTransporter) IsStatusBadGateway() bool {
+	return u.StatusCode == http.StatusBadGateway
+}
+
+func (u *URLTransporter) IsStatusServiceUnavailable() bool {
+	return u.StatusCode == http.StatusServiceUnavailable
+}
+
+func (u *URLTransporter) IsStatusGatewayTimeout() bool {
+	return u.StatusCode == http.StatusGatewayTimeout
 }
 
 //func (u *URLPusher) Status() int {
 //	return u.StatusCode
 //}
 
-func (u *URLPusher) setUserAgent(req *http.Request) {
+func (u *URLTransporter) setUserAgent(req *http.Request) {
 	log.Debugf("Setting user-agent to vic/%s", version.Version)
 	req.Header.Set("User-Agent", "vic/"+version.Version)
 }
 
-func (u *URLPusher) setBasicAuth(req *http.Request) {
+func (u *URLTransporter) setBasicAuth(req *http.Request) {
 	if u.options.Username != "" && u.options.Password != "" {
 		log.Debugf("Setting BasicAuth: %s", u.options.Username)
 		req.SetBasicAuth(u.options.Username, u.options.Password)
 	}
 }
 
-func (u *URLPusher) setAuthToken(req *http.Request) {
+func (u *URLTransporter) setAuthToken(req *http.Request) {
 	if u.options.Token != nil {
 		req.Header.Set("Authorization", "Bearer "+u.options.Token.Token)
 	}
 }
 
 // ExtractOAuthURL extracts the OAuth url from the www-authenticate header
-func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error) {
+func (u *URLTransporter) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error) {
 
 	log.Infof("the hdr in ExtractAuthURL is: %s", hdr)
 	tokens := strings.Split(hdr, " ")
@@ -199,7 +321,6 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 	// bearer realm=\"https://kang.eng.vmware.com/service/token\",
 	// service=\"harbor-registry\",
 	// scope=\"repository:test/busybox:pull,push repository:test/ubuntu:pull\"
-	// if we use ',' as the separator, the last 'push' will be missing; but so far it works well without the last "push" in "scope"
 	if len(tokens) == 3 {
 		tokens[1] += " " + tokens[2]
 	}
@@ -251,13 +372,13 @@ func (u *URLPusher) ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, 
 	return auth, nil
 }
 
-// upload the layer (monolithic upload)
-// PUT /v2/<name>/blobs/uploads/<uuid>?digest=<digest>; this uuid is from the `location` header
-// in the response of the first step if successful
-func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl, size string, layer io.Reader) error {
+// Upload the layer (monolithic upload)
+func (u *URLTransporter) UploadLayer(ctx context.Context, digest, uploadUrl string, layer io.Reader, po progress.Output, ids ...string) error {
 	defer trace.End(trace.Begin(uploadUrl))
 
-	//uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
+	// PUT /v2/<name>/blobs/uploads/<uuid>?digest=<digest>
+	// The uuid is from the `location` header
+	// in the response of the first step if successful
 	composedUrl, err := url.Parse(uploadUrl)
 	if err != nil {
 		return fmt.Errorf("failed to parse uploadUrl: %s", err)
@@ -266,14 +387,17 @@ func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl, size str
 	q.Add("digest", digest)
 	composedUrl.RawQuery = q.Encode()
 
-	log.Infof("The url for UploadLayer is: %s", composedUrl)
+	log.Debugf("The url for UploadLayer is: %s", composedUrl)
 
 	reqHdrs := &http.Header{
-		//"Content-Length": {size},
 		"Content-Type": {"application/octet-stream"},
 	}
 
-	_, err = u.Push(ctx, composedUrl, layer, reqHdrs, "PUT")
+	id := ""
+	if len(ids) > 0 {
+		id = ids[0]
+	}
+	_, err = u.Put(ctx, composedUrl, layer, reqHdrs, po, id)
 	if err != nil {
 		return fmt.Errorf("failed to upload layer: %s", err)
 	}
@@ -283,15 +407,14 @@ func (u *URLPusher) UploadLayer(ctx context.Context, digest, uploadUrl, size str
 		return nil
 	}
 
-	// retry upon 502, 503, 504
-
 	return fmt.Errorf("unexpected http code during UploadLayer: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
-// DELETE /v2/<name>/blobs/uploads/<uuid>
-func (u *URLPusher) CancelUpload(ctx context.Context, uploadUrl string) error {
+// Cancel the upload process
+func (u *URLTransporter) CancelUpload(ctx context.Context, uploadUrl string, po progress.Output) error {
 	defer trace.End(trace.Begin(uploadUrl))
 
+	// DELETE /v2/<name>/blobs/uploads/<uuid>
 	composedUrl, err := url.Parse(uploadUrl)
 	if err != nil {
 		return fmt.Errorf("failed to parse uploadUrl: %s", err)
@@ -299,7 +422,7 @@ func (u *URLPusher) CancelUpload(ctx context.Context, uploadUrl string) error {
 
 	log.Debugf("The url for CancelUpload is: %s\n ", composedUrl)
 
-	_, err = u.Push(ctx, composedUrl, nil, nil, "DELETE")
+	_, err = u.Delete(ctx, composedUrl, nil, po)
 	if err != nil {
 		return fmt.Errorf("failed to cancel upload: %s", err)
 	}
@@ -312,14 +435,13 @@ func (u *URLPusher) CancelUpload(ctx context.Context, uploadUrl string) error {
 	return fmt.Errorf("unexpected http code during CancelUpload: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
-func (u *URLPusher) CompletedUpload(ctx context.Context, digest, uploadUrl string) error {
+// Notify the registry that the upload process is completed
+// Currently this is not used since we only use monolithic upload
+// However, if the image layer is too large, chunk upload has to be implemented and this method should be called to complete the process
+func (u *URLTransporter) CompletedUpload(ctx context.Context, digest, uploadUrl string, po progress.Output) error {
 	defer trace.End(trace.Begin(uploadUrl))
-	// PUT /v2/<name>/blob/uploads/<uuid>?digest=<digest>
-	// From docker's documentation: if all chunks have already been uploaded,
-	// a PUT request with a digest parameter and zero-length body
-	// may be sent to complete and validated the upload.
 
-	//uploadUrl = fmt.Sprintf("%s?digest=%s", uploadUrl, digest)
+	// PUT /v2/<name>/blob/uploads/<uuid>?digest=<digest>
 	composedUrl, err := url.Parse(uploadUrl)
 	q := composedUrl.Query()
 	q.Add("digest", digest)
@@ -331,7 +453,7 @@ func (u *URLPusher) CompletedUpload(ctx context.Context, digest, uploadUrl strin
 		"Content-Length": {"0"},
 		"Content-Type":   {"application/octet-stream"},
 	}
-	_, err = u.Push(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, "PUT")
+	_, err = u.Put(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, po)
 	if err != nil {
 		return fmt.Errorf("failed to complete upload: %s", err)
 	}
@@ -344,22 +466,23 @@ func (u *URLPusher) CompletedUpload(ctx context.Context, digest, uploadUrl strin
 	return fmt.Errorf("unexpected http code during CompletedUpload: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
-// HEAD /v2/<name>/blobs/<digest>
-func (u *URLPusher) CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL) (bool, error) {
+// Check if a layer exists
+func (u *URLTransporter) CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL, po progress.Output) (bool, error) {
 	defer trace.End(trace.Begin(digest))
 
+	// HEAD /v2/<name>/blobs/<digest>
 	composedUrl := urlDeepCopy(registry)
 	composedUrl.Path = path.Join(registry.Path, image, "blobs", digest)
 
 	log.Debugf("The url for checking layer existence is: %s", composedUrl)
 
-	_, err := u.Push(ctx, composedUrl, nil, nil, "HEAD")
+	_, err := u.Head(ctx, composedUrl, nil, po)
 	if err != nil {
 		return false, fmt.Errorf("failed to check layer existence: %s", err)
 	}
 
 	if u.IsStatusOK() {
-		log.Infof("The layer already exists; no need to upload")
+		log.Debugf("The layer already exists")
 		return true, nil
 	}
 
@@ -371,17 +494,17 @@ func (u *URLPusher) CheckLayerExistence(ctx context.Context, image, digest strin
 }
 
 // obtain the upload url
-// POST /v2/<name>/blobs/uploads
-func (u *URLPusher) ObtainUploadUrl(ctx context.Context, registry *url.URL, image string) (string, error) {
+func (u *URLTransporter) ObtainUploadUrl(ctx context.Context, registry *url.URL, image string, po progress.Output) (string, error) {
 	defer trace.End(trace.Begin(image))
 
+	// POST /v2/<name>/blobs/uploads
 	composedUrl := urlDeepCopy(registry)
 	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads/")
 	composedUrl.Path += "/"
 
 	log.Debugf("The url for ObtainUploadUrl is: %s", composedUrl)
 
-	hdr, err := u.Push(ctx, composedUrl, nil, nil, "POST")
+	hdr, err := u.Post(ctx, composedUrl, nil, nil, po)
 
 	if err != nil {
 		return "", err
@@ -396,9 +519,11 @@ func (u *URLPusher) ObtainUploadUrl(ctx context.Context, registry *url.URL, imag
 	return "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
-func (u *URLPusher) MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string) (bool, string, error) {
+func (u *URLTransporter) MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string, po progress.Output) (bool, string, error) {
 	defer trace.End(trace.Begin("image: " + image + ", repo: " + repo))
 
+	// POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repository name>
+	// Content-Length: 0
 	composedUrl := urlDeepCopy(registry)
 	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads")
 	composedUrl.Path += "/"
@@ -408,15 +533,13 @@ func (u *URLPusher) MountBlobToRepo(ctx context.Context, registry *url.URL, dige
 	q.Add("from", repo)
 	composedUrl.RawQuery = q.Encode()
 
-	log.Infof("The url for MountBlobToRepo is: %s\n ", composedUrl)
+	log.Debugf("The url for MountBlobToRepo is: %s\n ", composedUrl)
 
-	// POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repository name>
-	// Content-Length: 0
 	reqHdrs := &http.Header{
 		"Content-Length": {"0"},
 	}
 
-	hdr, err := u.Push(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, "POST")
+	hdr, err := u.Post(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, po)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to mount blob to repo: %s", err)
 	}
@@ -451,6 +574,6 @@ func urlDeepCopy(src *url.URL) *url.URL {
 	return dest
 }
 
-func (u *URLPusher) Status() int {
+func (u *URLTransporter) Status() int {
 	return u.StatusCode
 }

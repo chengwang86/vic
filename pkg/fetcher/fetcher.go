@@ -275,7 +275,7 @@ func (u *URLFetcher) fetch(ctx context.Context, url *url.URL, reqHdrs *http.Head
 			//return nil, nil, ImageNotFoundError{Err: err}
 			return nil, nil, fmt.Errorf("not authorized - insufficient_scope")
 		} else if strings.Contains(hdr, "error=\"invalid_token\"") {
-			return nil, nil, fmt.Errorf("not authorized")
+			return nil, nil, fmt.Errorf("not authorized - invalid_token")
 		} else {
 			return nil, nil, fmt.Errorf("Unexpected http code: %d, URL: %s", u.StatusCode, url)
 		}
