@@ -752,8 +752,8 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 	}
 
 	// calculate image ID
-	log.Infof("Image ID: sha256:%s", configDigest)
-	digest := "sha256:" + digest.Digest(configDigest)
+	pushDigest := "sha256:" + digest.Digest(configDigest)
+	log.Infof("Image ID: %s", pushDigest)
 
 	// build out PushManifest with all generated components
 	pusher.PushManifest = schema2.Manifest{
@@ -765,7 +765,7 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 		Config: distribution.Descriptor{
 			MediaType: schema2.MediaTypeImageConfig,
 			Size:      configSize,
-			Digest:    digest,
+			Digest:    digest.Digest(pushDigest),
 		},
 	}
 
@@ -977,7 +977,7 @@ func (p *Pusher) GetReaderForLayer(layerID string) (*ArchiveStream, io.ReadClose
 
 	stream.layerFile = f
 	stream.size = written
-	stream.digest = fmt.Sprintf("%x", h.Sum(nil))
+	stream.digest = fmt.Sprintf("sha256:%x", h.Sum(nil))
 
 	return stream, f, nil
 }
