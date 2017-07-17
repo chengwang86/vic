@@ -982,7 +982,7 @@ func CompletedUpload(ctx context.Context, u *urlfetcher.URLTransporter, digest, 
 		return fmt.Errorf("failed to complete upload: %s", err)
 	}
 
-	if u.IsStatusNoContent() {
+	if u.IsStatusCreated() {
 		log.Infof("The upload process completed successfully")
 		return nil
 	}
