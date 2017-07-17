@@ -17,8 +17,16 @@ package imagec
 import (
 	"testing"
 
+	"net/http"
+	"net/http/httptest"
+	"os"
+
+	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/reference"
 	"github.com/stretchr/testify/assert"
+	urlfetcher "github.com/vmware/vic/pkg/fetcher"
+
+	"net/url"
 )
 
 const (
@@ -102,4 +110,90 @@ func TestGetManifestDigest(t *testing.T) {
 	// Attempt to get and verify an incorrect manifest content with the digest
 	digest, err = getManifestDigest([]byte(DefaultManifest), ref)
 	assert.NotNil(t, err)
+}
+
+func TestLearnAuthURLForPush(t *testing.T) {
+	var err error
+
+	options := Options{
+		Outstream: os.Stdout,
+	}
+
+	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
+
+	s := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("www-authenticate",
+				"Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/ubuntu:pull,push\"")
+			http.Error(w, "You shall not pass", http.StatusUnauthorized)
+		}))
+	defer s.Close()
+
+	ic.Options.Registry = s.URL
+	ic.Options.Image = Image
+	ic.Options.Tag = Tag
+	ic.Options.Timeout = DefaultHTTPTimeout
+	ic.Options.Reference, err = reference.ParseNamed(Reference)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	url, err := LearnAuthURLForPush(ic.Options, ic.progressOutput)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	if url.String() != "https://auth.docker.io/token?scope=repository%3Alibrary%2Fubuntu%3Apull%2Cpush&service=registry.docker.io" {
+		t.Errorf("Returned url %s is different than expected", url)
+	}
+}
+
+func TestCheckLayerExistence(t *testing.T) {
+	var err error
+
+	options := Options{
+		Outstream: os.Stdout,
+	}
+
+	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
+
+	s := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("www-authenticate",
+				"Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/photon:pull,push\"")
+			http.Error(w, "You shall not pass", http.StatusUnauthorized)
+		}))
+	defer s.Close()
+
+	ic.Options.Registry = s.URL
+	ic.Options.Image = Image
+	ic.Options.Tag = Tag
+	ic.Options.Timeout = DefaultHTTPTimeout
+	ic.Options.Reference, err = reference.ParseNamed(Reference)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            ic.Options.Timeout,
+		Username:           ic.Options.Username,
+		Password:           ic.Options.Password,
+		Token:              ic.Options.Token,
+		InsecureSkipVerify: ic.Options.InsecureSkipVerify,
+		RootCAs:            ic.Options.RegistryCAs,
+	})
+
+	pushDigest := UbuntuDigestSHA
+	layerID := "MockLayer"
+
+	registryUrl, err := url.Parse(ic.Options.Registry)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	exist, err := CheckLayerExistence(ctx, transporter, options.Image, pushDigest, registryUrl, ic.progressOutput)
+	if err != nil {
+		t.Errorf("failed to check for presence of layer %s (%s) in %s: %s", layerID, pushDigest, options.Image, err)
+	}
+	assert.Equal(t, true, exist, "Layer should exist!")
 }

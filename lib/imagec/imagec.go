@@ -628,7 +628,7 @@ func (ic *ImageC) prepareTransfer(ctx context.Context, imageOperation string) er
 
 	// Get the OAuth token - if only we have a URL
 	if url != nil {
-		token, err := FetchToken(ic.Options, url)
+		token, err := FetchToken(ctx, ic.Options, url, ic.progressOutput)
 		if err != nil {
 			log.Errorf("Failed to fetch OAuth token: %s", err)
 			return err

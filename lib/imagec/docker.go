@@ -143,7 +143,7 @@ func LearnAuthURL(options Options) (*url.URL, error) {
 }
 
 // FetchToken fetches the OAuth token from OAuth endpoint
-func FetchToken(options Options, url *url.URL) (*urlfetcher.Token, error) {
+func FetchToken(ctx context.Context, options Options, url *url.URL, progressOutput progress.Output) (*urlfetcher.Token, error) {
 	defer trace.End(trace.Begin(url.String()))
 
 	log.Debugf("URL: %s", url)
@@ -576,11 +576,10 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 		RootCAs:            options.RegistryCAs,
 	})
 
-	// TODO: ask Loc to pass the digest as the input
 	pushDigest := as.digest
 
 	log.Debugf("Checking for presence of layer %s (%s) in %s", layerID, pushDigest, options.Image)
-	exist, err := transporter.CheckLayerExistence(ctx, options.Image, pushDigest, registryUrl, po)
+	exist, err := CheckLayerExistence(ctx, transporter, options.Image, pushDigest, registryUrl, po)
 	if err != nil {
 		return fmt.Errorf("failed to check for presence of layer %s (%s) in %s: %s", layerID, pushDigest, options.Image, err)
 	}
@@ -609,7 +608,7 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 	// obtain upload url to start upload process
 	// which would require obtaining a list of the repositories that the current user has access to.
 	// See https://docs.docker.com/registry/spec/api/#pushing-an-image
-	uploadURL, err := transporter.ObtainUploadUrl(ctx, registryUrl, options.Image, po)
+	uploadURL, err := ObtainUploadUrl(ctx, transporter, registryUrl, options.Image, po)
 	if err != nil {
 		return err
 	}
@@ -617,13 +616,13 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 
 	defer func() {
 		if err != nil {
-			if err2 := transporter.CancelUpload(ctx, uploadURL, po); err2 != nil {
+			if err2 := CancelUpload(ctx, transporter, uploadURL, po); err2 != nil {
 				log.Errorf("Failed during CancelUpload: %s", err2)
 			}
 		}
 	}()
 
-	if err = transporter.UploadLayer(ctx, pushDigest, uploadURL, layerReader, po); err != nil {
+	if err = UploadLayer(ctx, transporter, pushDigest, uploadURL, layerReader, po); err != nil {
 		return err
 	}
 	progress.Update(po, layerID, "Pushed")
@@ -633,11 +632,6 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 
 func CrossRepoBlobMount(ctx context.Context, layerID, digest string, options Options, repoList []string, po progress.Output) (bool, error) {
 	defer trace.End(trace.Begin(options.Image))
-
-	//// mock diffID. This should be replaced by info from upload manager. It is only needed for logging
-	//diffID := "sha256:27144aa8f1b9e066514d7f765909367584e552915d0d4bc2f5b7438ba7d1033a"
-	//// this is needed for updating the progress output
-	//layerID := "layerID"
 
 	var (
 		mounted  bool
@@ -696,7 +690,7 @@ func CrossRepoBlobMount(ctx context.Context, layerID, digest string, options Opt
 
 		// Get the OAuth token - if only we have a URL
 		if authURL != nil {
-			newToken, err = FetchToken(options, authURL)
+			newToken, err = FetchToken(ctx, options, authURL, po)
 			if err != nil {
 				log.Errorf("Failed to fetch OAuth token: %s", err)
 				return false, err
@@ -714,7 +708,7 @@ func CrossRepoBlobMount(ctx context.Context, layerID, digest string, options Opt
 
 		// if mount fails, the registry will fall back to the standard upload behavior
 		// and return a 202 Accepted with the upload URL in the Location header
-		mounted, _, err = newTransporter.MountBlobToRepo(ctx, registry, digest, options.Image, repo, po)
+		mounted, _, err = MountBlobToRepo(ctx, newTransporter, registry, digest, options.Image, repo, po)
 		if err != nil {
 			log.Errorf("Mount layer to repo %s failed: %s", repo, err)
 		}
@@ -800,7 +794,7 @@ func ObtainRepoList(options Options, po progress.Output) ([]string, error) {
 			return nil, fmt.Errorf("failed to extact oauth url: %s", err)
 		}
 
-		token, err = FetchToken(options, oauthUrl)
+		token, err = FetchToken(ctx, options, oauthUrl, po)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch OAuth token: %s", err)
 		}
@@ -899,6 +893,193 @@ func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schem
 	progress.Message(progressOutput, tagOrDigest, "Digest: (sha256:ImageDigest) size: sizeOfManifest")
 
 	return nil
+}
+
+
+// Upload the layer (monolithic upload)
+func UploadLayer(ctx context.Context, u *urlfetcher.URLTransporter, digest, uploadUrl string, layer io.Reader, po progress.Output, ids ...string) error {
+	defer trace.End(trace.Begin(uploadUrl))
+
+	// PUT /v2/<name>/blobs/uploads/<uuid>?digest=<digest>
+	// The uuid is from the `location` header
+	// in the response of the first step if successful
+	composedUrl, err := url.Parse(uploadUrl)
+	if err != nil {
+		return fmt.Errorf("failed to parse uploadUrl: %s", err)
+	}
+	q := composedUrl.Query()
+	q.Add("digest", digest)
+	composedUrl.RawQuery = q.Encode()
+
+	log.Debugf("The url for UploadLayer is: %s", composedUrl)
+
+	reqHdrs := &http.Header{
+		"Content-Type": {"application/octet-stream"},
+	}
+
+	id := ""
+	if len(ids) > 0 {
+		id = ids[0]
+	}
+	_, err = u.Put(ctx, composedUrl, layer, reqHdrs, po, id)
+	if err != nil {
+		return fmt.Errorf("failed to upload layer: %s", err)
+	}
+
+	if u.IsStatusCreated() {
+		log.Infof("The uploadLayer finished successfully")
+		return nil
+	}
+
+	return fmt.Errorf("unexpected http code during UploadLayer: %d, URL: %s", u.StatusCode, composedUrl)
+}
+
+// Cancel the upload process
+func CancelUpload(ctx context.Context, u *urlfetcher.URLTransporter, uploadUrl string, po progress.Output) error {
+	defer trace.End(trace.Begin(uploadUrl))
+
+	// DELETE /v2/<name>/blobs/uploads/<uuid>
+	composedUrl, err := url.Parse(uploadUrl)
+	if err != nil {
+		return fmt.Errorf("failed to parse uploadUrl: %s", err)
+	}
+
+	log.Debugf("The url for CancelUpload is: %s\n ", composedUrl)
+
+	_, err = u.Delete(ctx, composedUrl, nil, po)
+	if err != nil {
+		return fmt.Errorf("failed to cancel upload: %s", err)
+	}
+
+	if u.IsStatusNoContent() {
+		log.Infof("The upload process is cancelled successfully")
+		return nil
+	}
+
+	return fmt.Errorf("unexpected http code during CancelUpload: %d, URL: %s", u.StatusCode, composedUrl)
+}
+
+// Notify the registry that the upload process is completed
+// Currently this is not used since we only use monolithic upload
+// However, if the image layer is too large, chunk upload has to be implemented and this method should be called to complete the process
+func CompletedUpload(ctx context.Context, u *urlfetcher.URLTransporter, digest, uploadUrl string, po progress.Output) error {
+	defer trace.End(trace.Begin(uploadUrl))
+
+	// PUT /v2/<name>/blob/uploads/<uuid>?digest=<digest>
+	composedUrl, err := url.Parse(uploadUrl)
+	q := composedUrl.Query()
+	q.Add("digest", digest)
+	composedUrl.RawQuery = q.Encode()
+
+	log.Debugf("The url for CompletedUpload is: %s", composedUrl)
+
+	reqHdrs := &http.Header{
+		"Content-Length": {"0"},
+		"Content-Type":   {"application/octet-stream"},
+	}
+	_, err = u.Put(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, po)
+	if err != nil {
+		return fmt.Errorf("failed to complete upload: %s", err)
+	}
+
+	if u.IsStatusNoContent() {
+		log.Infof("The upload process completed successfully")
+		return nil
+	}
+
+	return fmt.Errorf("unexpected http code during CompletedUpload: %d, URL: %s", u.StatusCode, composedUrl)
+}
+
+// Check if a layer exists
+func CheckLayerExistence(ctx context.Context, u *urlfetcher.URLTransporter, image, digest string, registry *url.URL, po progress.Output) (bool, error) {
+	defer trace.End(trace.Begin(digest))
+
+	// HEAD /v2/<name>/blobs/<digest>
+	composedUrl := urlfetcher.UrlDeepCopy(registry)
+	composedUrl.Path = path.Join(registry.Path, image, "blobs", digest)
+
+	log.Debugf("The url for checking layer existence is: %s", composedUrl)
+
+	_, err := u.Head(ctx, composedUrl, nil, po)
+	if err != nil {
+		return false, fmt.Errorf("failed to check layer existence: %s", err)
+	}
+
+	if u.IsStatusOK() {
+		log.Debugf("The layer already exists")
+		return true, nil
+	}
+
+	if u.IsStatusNotFound() {
+		log.Infof("The layer does not exist")
+		return false, nil
+	}
+	return false, fmt.Errorf("unexpected http code during CheckLayerExistence: %d, URL: %s", u.StatusCode, composedUrl)
+}
+
+// obtain the upload url
+func ObtainUploadUrl(ctx context.Context, u *urlfetcher.URLTransporter, registry *url.URL, image string, po progress.Output) (string, error) {
+	defer trace.End(trace.Begin(image))
+
+	// POST /v2/<name>/blobs/uploads
+	composedUrl := urlfetcher.UrlDeepCopy(registry)
+	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads/")
+	composedUrl.Path += "/"
+
+	log.Debugf("The url for ObtainUploadUrl is: %s", composedUrl)
+
+	hdr, err := u.Post(ctx, composedUrl, nil, nil, po)
+
+	if err != nil {
+		return "", err
+	}
+
+	// even if the image does not exist (push a new image), we should still be able to get a location for upload
+	if u.IsStatusAccepted() {
+		log.Debugf("The location is: %s", hdr.Get("Location"))
+		return hdr.Get("Location"), nil
+	}
+
+	return "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.StatusCode, composedUrl)
+}
+
+func MountBlobToRepo(ctx context.Context, u *urlfetcher.URLTransporter, registry *url.URL, digest, image, repo string, po progress.Output) (bool, string, error) {
+	defer trace.End(trace.Begin("image: " + image + ", repo: " + repo))
+
+	// POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repository name>
+	// Content-Length: 0
+	composedUrl := urlfetcher.UrlDeepCopy(registry)
+	composedUrl.Path = path.Join(registry.Path, image, "blobs/uploads")
+	composedUrl.Path += "/"
+
+	q := composedUrl.Query()
+	q.Add("mount", digest)
+	q.Add("from", repo)
+	composedUrl.RawQuery = q.Encode()
+
+	log.Debugf("The url for MountBlobToRepo is: %s\n ", composedUrl)
+
+	reqHdrs := &http.Header{
+		"Content-Length": {"0"},
+	}
+
+	hdr, err := u.Post(ctx, composedUrl, bytes.NewReader([]byte("")), reqHdrs, po)
+	if err != nil {
+		return false, "", fmt.Errorf("failed to mount blob to repo: %s", err)
+	}
+
+	if u.IsStatusCreated() {
+		log.Infof("The blob is already mounted to the repo!")
+		return true, "", nil
+	}
+
+	if u.IsStatusAccepted() {
+		log.Infof("The blob is not mounted to repo '%s' yet", repo)
+		log.Infof("The location is: %s", hdr.Get("Location"))
+		return false, hdr.Get("Location:"), nil
+	}
+
+	return false, "", fmt.Errorf("unexpected http code during ObtainUploadUrl: %d, URL: %s", u.StatusCode, composedUrl)
 }
 
 func ShortID(id string) string {
