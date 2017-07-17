@@ -353,6 +353,8 @@ func updateRepositoryCache(ic *ImageC) error {
 func (ic *ImageC) WriteImageBlob(image *ImageWithMeta, progressOutput progress.Output, cleanup bool) error {
 	defer trace.End(trace.Begin(image.Image.ID))
 
+	log.Debugf("write image blob - %+v", image)
+
 	destination := DestinationDirectory(ic.Options)
 
 	id := image.Image.ID
@@ -707,6 +709,8 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 	if err != nil {
 		return fmt.Errorf("Unable to get top layer id for image %s", id)
 	}
+	log.Debugf("The leaf layerID: %s", layerID)
+	log.Debugf("The leaf layer: %+v", layer)
 
 	// Build a layers history slice and add layers to stream map
 	var layersHistory []*ImageWithMeta
@@ -732,6 +736,9 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 		if err != nil {
 			return fmt.Errorf("Unable to get metadata for layer %s", layerID)
 		}
+
+		log.Debugf("The layerID: %s", layerID)
+		log.Debugf("The layer: %+v", layer)
 
 		layersHistory = append(layersHistory, layer)
 	}

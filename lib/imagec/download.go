@@ -26,6 +26,7 @@ import (
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
+	log "github.com/Sirupsen/logrus"
 )
 
 const (
@@ -321,6 +322,7 @@ func (ldm *LayerDownloader) makeDownloadFunc(layer *ImageWithMeta, ic *ImageC, p
 			}
 
 			if !ic.Standalone {
+				log.Debugf("before commit, the layer is: %+v", layer)
 				// mark the layer as finished downloading
 				LayerCache().Commit(layer)
 			}
