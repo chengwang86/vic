@@ -62,21 +62,27 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 		}
 	)
 
-	log.Infof("There are %d layers to upload", len(ic.ImageLayers))
-	for _, layer := range ic.ImageLayers {
-		log.Infof("Preparing to upload...")
-		progress.Update(progressOutput, layer.String(), "Preparing")
+	go progressOutput.run()
+	defer progressOutput.stop()
+
+	pusher := ic.Pusher
+	log.Infof("There are %d layers to upload", len(pusher.streamMap))
+	for _, stream := range pusher.streamMap {
+		progress.Update(progressOutput, stream.layerID, "Preparing")
 
 		// Check if already uploading
-		if _, present := currTransfer[layer.ID]; present {
+		if _, present := currTransfer[stream.layerID]; present {
 			continue
 		}
 
-		xferFunc := lum.makeUploadFunc(layer, ic)
-		upload, watcher := lum.tm.Transfer(layer.ID, xferFunc, progressOutput)
+		log.Infof("Making transfer function for %s...", stream.layerID)
+		xferFunc := lum.makeUploadFunc(ic, stream.layerID)
+		log.Infof("Starting transfer... function = %#v", xferFunc)
+		upload, watcher := lum.tm.Transfer(stream.layerID, xferFunc, progressOutput)
+		log.Infof("Tracking transfer...")
 		defer upload.Release(watcher)
 		uploads = append(uploads, upload.(*uploadTransfer))
-		currTransfer[layer.ID] = upload.(*uploadTransfer)
+		currTransfer[stream.layerID] = upload.(*uploadTransfer)
 	}
 
 	for _, upload := range uploads {
@@ -93,13 +99,14 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 	return nil
 }
 
-func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.DoFunc {
+func (lum *LayerUploader) makeUploadFunc(ic *ImageC, layerID string) xfer.DoFunc {
 	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) xfer.Transfer {
 		u := &uploadTransfer{
 			Transfer: xfer.NewTransfer(),
 		}
 
-		aStream, reader, err := ic.Pusher.GetReaderForLayer(layer.ID)
+		log.Infof("Getting stream reader from upload function")
+		aStream, reader, err := ic.Pusher.GetReaderForLayer(layerID)
 		if err != nil {
 			u.err = err
 			return u
@@ -124,7 +131,7 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 			select {
 			case <-start:
 			default:
-				progress.Update(progressOutput, layer.String(), "Waiting")
+				progress.Update(progressOutput, layerID, "Waiting")
 				<-start
 			}
 

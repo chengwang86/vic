@@ -164,6 +164,7 @@ func (i *ImageWithMeta) String() string {
 
 var (
 	ldm *LayerDownloader
+	lum *LayerUploader
 )
 
 const (
@@ -189,6 +190,7 @@ const (
 
 func init() {
 	ldm = NewLayerDownloader()
+	lum = NewLayerUploader()
 }
 
 // ParseReference parses the -reference parameter and populate options struct
@@ -534,7 +536,6 @@ func (ic *ImageC) PushImage() error {
 	}
 
 	// Upload all the layers
-	var lum LayerUploader
 	if err := lum.UploadLayers(ctx, ic); err != nil {
 		return err
 	}
