@@ -36,7 +36,6 @@ const (
 	UbuntuTaggedRef        = "library/ubuntu:latest"
 	UbuntuDigest           = "ubuntu@sha256:45b23dee08af5e43a7fea6c4cf9c25ccf269ee113168c19722f87876677c5cb2"
 	UbuntuDigestSHA        = "sha256:45b23dee08af5e43a7fea6c4cf9c25ccf269ee113168c19722f87876677c5cb2"
-	UbuntuDigestSHAEncoded = "sha256%3A45b23dee08af5e43a7fea6c4cf9c25ccf269ee113168c19722f87876677c5cb2"
 	UbuntuDigestManifest   = `{
    "schemaVersion": 1,
    "name": "library/ubuntu",
@@ -89,12 +88,35 @@ const (
 }
 `
 	WrongDigest        = "sha256:12345dee08af5e43a7fea6c4cf9c25ccf269ee113168c19722f87876677c5cb2"
-	MockImage          = "test/photon"
+	MockImage          = "test/ubuntu"
 	MockUploadLocation = "/v2/test/ubuntu/blobs/uploads/" +
 		"00f4bfb1-682e-4a2b-86c5-8ace83e70cba?_state=rh9dXg5Vn5dZ_LQa5u9HN7RHdo3DyyuJ3GQowFn2jvt7Ik5hbWUiOiJjaGVuZy10ZXN0L2J1c3lib3h2NSIsIlVVSUQiOiIwMGY0YmZiMS02ODJlLTRhMmItODZjNS04YWNlODNlNzBjYmEiLCJPZmZzZXQiOjAsIlN0YXJ0ZWRBdCI6IjIwMTctMDctMTdUMTk6MDg6MjMuNjE0NDQyNzg4WiJ9"
 	WrongUploadLocation = "/v2/wrong/ubuntu/blobs/uploads/" +
 		"00f4bfb1-682e-4a2b-86c5-8ace83e70cba?_state=rh9dXg5Vn5dZ_LQa5u9HN7RHdo3DyyuJ3GQowFn2jvt7Ik5hbWUiOiJjaGVuZy10ZXN0L2J1c3lib3h2NSIsIlVVSUQiOiIwMGY0YmZiMS02ODJlLTRhMmItODZjNS04YWNlODNlNzBjYmEiLCJPZmZzZXQiOjAsIlN0YXJ0ZWRBdCI6IjIwMTctMDctMTdUMTk6MDg6MjMuNjE0NDQyNzg4WiJ9"
+	RepoMounted = "test/ubuntu1"
+	RepoNotMounted = "test/busybox"
+	RepoRandom = "randomRepo"
 )
+
+var (
+	RepoNotMountedEncoded string
+	RepoMountedEncoded string
+	UbuntuDigestSHAEncoded string
+)
+
+func init() {
+	RepoNotMountedEncoded = url.Values{
+		"from": {RepoNotMounted},
+	}.Encode()
+
+	RepoMountedEncoded = url.Values{
+		"from": {RepoMounted},
+	}.Encode()
+
+	UbuntuDigestSHAEncoded = url.Values{
+		"": {UbuntuDigestSHA},
+	}.Encode()
+}
 
 func TestGetManifestDigest(t *testing.T) {
 	// Get the manifest content when the image is not pulled by digest
@@ -154,6 +176,78 @@ func TestLearnAuthURLForPush(t *testing.T) {
 	}
 
 	if url.String() != "https://auth.docker.io/token?scope=repository%3Atest%2Fubuntu%3Apull%2Cpush&service=registry.docker.io" {
+		t.Errorf("Returned url %s is different than expected", url)
+	}
+}
+
+func TestLearnAuthURLForRepoList(t *testing.T) {
+	var err error
+
+	options := Options{
+		Outstream: os.Stdout,
+	}
+
+	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
+
+	s := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("www-authenticate",
+				"Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"registry:catalog:*\"")
+			http.Error(w, "You shall not pass", http.StatusUnauthorized)
+		}))
+	defer s.Close()
+
+	ic.Options.Registry = s.URL
+	ic.Options.Image = MockImage
+	ic.Options.Tag = Tag
+	ic.Options.Timeout = DefaultHTTPTimeout
+	ic.Options.Reference, err = reference.ParseNamed(Reference)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	url, err := LearnAuthURLForRepoList(ic.Options, ic.progressOutput)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	if url.String() != "https://auth.docker.io/token?scope=registry%3Acatalog%3A%2A%2Cscope%3D%22registry%3Acatalog%3A%2A&service=registry.docker.io" {
+		t.Errorf("Returned url %s is different than expected", url)
+	}
+}
+
+func TestLearnAuthURLForBlobMount(t *testing.T) {
+	var err error
+
+	options := Options{
+		Outstream: os.Stdout,
+	}
+
+	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
+
+	s := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("www-authenticate",
+				"Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:test/ubuntu:pull,push repository:test/ubuntu1:pull\"")
+			http.Error(w, "You shall not pass", http.StatusUnauthorized)
+		}))
+	defer s.Close()
+
+	ic.Options.Registry = s.URL
+	ic.Options.Image = MockImage
+	ic.Options.Tag = Tag
+	ic.Options.Timeout = DefaultHTTPTimeout
+	ic.Options.Reference, err = reference.ParseNamed(Reference)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	url, err := LearnAuthURLForBlobMount(ic.Options, UbuntuDigestSHA, RepoMounted, ic.progressOutput)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	if url.String() != "https://auth.docker.io/token?scope=repository%3Atest%2Fubuntu%3Apull%2Cpush+repository%3Atest%2Fubuntu1%3Apull&service=registry.docker.io" {
 		t.Errorf("Returned url %s is different than expected", url)
 	}
 }
@@ -417,10 +511,6 @@ func TestUploadLayer(t *testing.T) {
 	assert.Error(t, err, "UploadLayer is expected to fail due to wrong upload location!")
 }
 
-func TestCrossRepoBlobMount(t *testing.T) {
-
-}
-
 func TestMountBlobToRepo(t *testing.T) {
 	var err error
 
@@ -433,8 +523,10 @@ func TestMountBlobToRepo(t *testing.T) {
 	s := httptest.NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			fmt.Println("The request url is: ", r.URL.String())
-			if strings.Contains(r.URL.String(), MockUploadLocation) && strings.Contains(r.URL.String(), UbuntuDigestSHAEncoded) {
+			if strings.Contains(r.URL.String(), RepoMountedEncoded) {
 				w.WriteHeader(http.StatusCreated)
+			} else if strings.Contains(r.URL.String(), RepoNotMountedEncoded) {
+				w.WriteHeader(http.StatusAccepted)
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 			}
@@ -459,22 +551,69 @@ func TestMountBlobToRepo(t *testing.T) {
 		RootCAs:            ic.Options.RegistryCAs,
 	})
 
-	url := fmt.Sprintf("%s%s", s.URL, MockUploadLocation)
-	fmt.Println(url)
+	registryUrl, err := url.Parse(ic.Registry)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
 
-	err = UploadLayer(ctx, transporter, UbuntuDigestSHA, url, bytes.NewReader([]byte("")), ic.progressOutput)
-	assert.NoError(t, err, "UploadLayer is expected to succeed!")
+	mounted, _, err := MountBlobToRepo(ctx, transporter, registryUrl, UbuntuDigestSHA, ic.Image, RepoMounted, ic.progressOutput)
+	assert.NoError(t, err, "MountBlobToRepo is expected to succeed!")
+	assert.Equal(t, true, mounted, "The layer should have been mounted!")
 
-	err = UploadLayer(ctx, transporter, WrongDigest, url, bytes.NewReader([]byte("")), ic.progressOutput)
-	assert.Error(t, err, "UploadLayer is expected to fail due to wrong digest!")
+	mounted, _, err = MountBlobToRepo(ctx, transporter, registryUrl, UbuntuDigestSHA, ic.Image, RepoNotMounted, ic.progressOutput)
+	assert.NoError(t, err, "MountBlobToRepo is expected to succeed!")
+	assert.Equal(t, false, mounted, "The layer should not have been mounted!")
 
-	url = fmt.Sprintf("%s%s", s.URL, WrongUploadLocation)
-	fmt.Println(url)
-
-	err = UploadLayer(ctx, transporter, UbuntuDigestSHA, url, bytes.NewReader([]byte("")), ic.progressOutput)
-	assert.Error(t, err, "UploadLayer is expected to fail due to wrong upload location!")
+	mounted, _, err = MountBlobToRepo(ctx, transporter, registryUrl, UbuntuDigestSHA, ic.Image, RepoRandom, ic.progressOutput)
+	assert.Error(t, err, "MountBlobToRepo is expected to fail!")
+	assert.Equal(t, false, mounted, "The layer should not have been mounted!")
 }
 
 func TestObtainRepoList(t *testing.T) {
+	var err error
 
+	options := Options{
+		Outstream: os.Stdout,
+	}
+
+	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
+
+	s := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Println("The request url is: ", r.URL.String())
+			if strings.Contains(r.URL.String(), "catalog") {
+				repoData := fmt.Sprintf("{'repositories':[%s]}", RepoMounted)
+				fmt.Println("The repositories: %s", repoData)
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(repoData))
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+	defer s.Close()
+
+	ic.Options.Registry = s.URL
+	ic.Options.Image = MockImage
+	ic.Options.Tag = Tag
+	ic.Options.Timeout = DefaultHTTPTimeout
+	ic.Options.Reference, err = reference.ParseNamed(Reference)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	transporterForRepoList := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            options.Timeout,
+		Username:           options.Username,
+		Password:           options.Password,
+		Token:              options.Token,
+		InsecureSkipVerify: options.InsecureSkipVerify,
+		RootCAs:            options.RegistryCAs,
+	})
+
+	repoList, err := ObtainRepoList(transporterForRepoList, ic.Options, ic.progressOutput)
+	assert.NoError(t, err, "ObtainRepoList is expected to succeed!")
+	assert.Equal(t, 1, len(repoList), "One repository should have been returned")
+	assert.Equal(t, RepoMounted, repoList[0], "The repo %s should have been returned!", repoList[0])
 }
