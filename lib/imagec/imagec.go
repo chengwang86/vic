@@ -556,9 +556,9 @@ func (ic *ImageC) PushImage() error {
 	}
 
 	// Push up the image manifest
-	// if err := ic.pushManifest(ctx); err != nil {
-	// 	return err
-	// }
+	 if err := ic.pushManifest(ctx); err != nil {
+	 	return err
+	 }
 
 	return nil
 }
@@ -794,7 +794,7 @@ func (ic *ImageC) FinalizeManifest() error {
 
 	pusher.PushManifest.Layers = layers
 
-	log.Infof("Final manifest = %#v", pusher.PushManifest)
+	log.Infof("Final manifest = %#v", ic.Pusher.PushManifest)
 
 	return nil
 }

@@ -96,27 +96,27 @@ func NewURLTransporter(options Options) Transporter {
 }
 
 func (u *URLTransporter) Put(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, po progress.Output, ids ...string) (http.Header, error) {
-	hdr, _, err := u.requestWithRetry(ctx, url, body, reqHdrs, "PUT", po)
+	hdr, _, err := u.requestWithRetry(ctx, url, body, reqHdrs, http.MethodPut, po)
 	return hdr, err
 }
 
 func (u *URLTransporter) Post(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, po progress.Output, ids ...string) (http.Header, error) {
-	hdr, _, err := u.requestWithRetry(ctx, url, body, reqHdrs, "POST", po)
+	hdr, _, err := u.requestWithRetry(ctx, url, body, reqHdrs, http.MethodPost, po)
 	return hdr, err
 }
 
 func (u *URLTransporter) Delete(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error) {
-	hdr, _, err := u.requestWithRetry(ctx, url, nil, reqHdrs, "DELETE", po)
+	hdr, _, err := u.requestWithRetry(ctx, url, nil, reqHdrs, http.MethodDelete, po)
 	return hdr, err
 }
 
 func (u *URLTransporter) Head(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error) {
-	hdr, _, err :=  u.requestWithRetry(ctx, url, nil, reqHdrs, "HEAD", po)
+	hdr, _, err :=  u.requestWithRetry(ctx, url, nil, reqHdrs, http.MethodHead, po)
 	return hdr, err
 }
 
 func (u *URLTransporter) Get(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, io.ReadCloser, error) {
-	return u.requestWithRetry(ctx, url, nil, reqHdrs, "GET", po)
+	return u.requestWithRetry(ctx, url, nil, reqHdrs, http.MethodGet, po)
 }
 
 func (u *URLTransporter) request(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, operation string, po progress.Output) (http.Header, io.ReadCloser, error) {
