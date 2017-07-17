@@ -17,6 +17,8 @@ package imagec
 import (
 	"context"
 
+	log "github.com/Sirupsen/logrus"
+
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
@@ -60,7 +62,9 @@ func (lum *LayerUploader) UploadLayers(ctx context.Context, ic *ImageC) error {
 		}
 	)
 
+	log.Infof("There are %d layers to upload", len(ic.ImageLayers))
 	for _, layer := range ic.ImageLayers {
+		log.Infof("Preparing to upload...")
 		progress.Update(progressOutput, layer.String(), "Preparing")
 
 		// Check if already uploading
@@ -100,7 +104,6 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 			u.err = err
 			return u
 		}
-		defer aStream.Close()
 
 		go func() {
 			select {
@@ -110,8 +113,10 @@ func (lum *LayerUploader) makeUploadFunc(layer *ImageWithMeta, ic *ImageC) xfer.
 		}()
 
 		go func() {
+			log.Info("About to upload...")
 			defer func() {
 				close(progressChan)
+				aStream.Close()
 			}()
 
 			progressOutput := progress.ChanOutput(progressChan)

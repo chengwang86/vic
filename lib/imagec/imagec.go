@@ -33,7 +33,6 @@ import (
 
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/digest"
-	"github.com/docker/distribution/manifest"
 	"github.com/docker/distribution/manifest/schema2"
 	docker "github.com/docker/docker/image"
 	dockerLayer "github.com/docker/docker/layer"
@@ -75,6 +74,7 @@ func NewImageC(options Options, strfmtr *streamformatter.StreamFormatter, getArc
 		sf:             strfmtr,
 		progressOutput: strfmtr.NewProgressOutput(options.Outstream, false),
 		Pusher: Pusher{
+			streamMap:     make(map[string]*ArchiveStream),
 			ArchiveReader: getArchiveReader,
 		},
 	}
@@ -148,8 +148,8 @@ type ArchiveStream struct {
 // Pusher contains all "prepared" data needed to push an image
 type Pusher struct {
 	// pushWg          sync.WaitGroup
-	schema2Manifest schema2.Manifest
-	streamMap       map[string]*ArchiveStream
+	PushManifest schema2.Manifest
+	streamMap    map[string]*ArchiveStream
 
 	// Function from imagec caller to get archive reader.  This reduce the need for imageC
 	// from knowing about the portlayer and persona.
@@ -499,6 +499,8 @@ func (ic *ImageC) PullImage() error {
 
 	// Get layers to download from manifest
 	layers, err := ic.LayersToDownload()
+
+	log.Infof("Manifest for image = %#v", ic.ImageManifestSchema1)
 	if err != nil {
 		return err
 	}
@@ -518,9 +520,9 @@ func (ic *ImageC) PushImage() error {
 	defer cancel()
 
 	// Authenticate, get URL, get token
-	if err := ic.prepareTransfer(ctx); err != nil {
-		return err
-	}
+	// if err := ic.prepareTransfer(ctx); err != nil {
+	// 	return err
+	// }
 
 	// Output message
 	progress.Message(ic.progressOutput, "", "The push refers to a repository ["+ic.Image+"]")
@@ -542,9 +544,9 @@ func (ic *ImageC) PushImage() error {
 	}
 
 	// Push up the image manifest
-	if err := ic.pushManifest(ctx); err != nil {
-		return err
-	}
+	// if err := ic.pushManifest(ctx); err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
@@ -638,6 +640,9 @@ func (ic *ImageC) pullManifest(ctx context.Context) error {
 		return fmt.Errorf("Error pulling manifest schema 1")
 	}
 
+	if schema1 != nil {
+		log.Infof("pullManifest - schema 1: %#v", schema1)
+	}
 	ic.ImageManifestSchema1 = schema1
 	ic.ManifestDigest = digest
 
@@ -645,6 +650,9 @@ func (ic *ImageC) pullManifest(ctx context.Context) error {
 	manifest, digest, err = FetchImageManifest(ctx, ic.Options, 2, ic.progressOutput)
 	if err == nil {
 		if schema2, ok := manifest.(*schema2.DeserializedManifest); ok {
+			if schema2 != nil {
+				log.Infof("pullManifest - schema 2: %#v", schema2)
+			}
 			ic.ImageManifestSchema2 = schema2
 
 			// Override the manifest digest as Docker uses schema 2, unless the image
@@ -656,11 +664,15 @@ func (ic *ImageC) pullManifest(ctx context.Context) error {
 		}
 	}
 
+	log.Infof("pullManifest - digest: %s", ic.ManifestDigest)
+
 	return nil
 }
 
 // PrepareManifestAndLayers creates the manifest and layers for an image to be pushed.
 func (ic *ImageC) PrepareManifestAndLayers() error {
+	defer trace.End(trace.Begin(""))
+
 	// get id of image from the reference
 	id, err := cache.RepositoryCache().Get(ic.Options.Reference)
 	if err != nil {
@@ -684,25 +696,29 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 
 	// use the leaf layer to walk the chain of layers down to the base parent (scratch)
 	for {
-		// Check for scratch ID
-		if layer.Image.Parent == storage.Scratch.ID {
-			break
-		}
-
 		pusher.streamMap[layerID] = &ArchiveStream{
 			layerID:       layerID,
 			parentLayerID: layer.Image.Parent,
 		}
 
+		log.Infof("Image data for layer %s = %#v", layerID, *layer.Image)
+
+		// Check for scratch ID
+		if layer.Image.Parent == storage.Scratch.ID {
+			break
+		}
+
 		// set the layer to the parent layer
-		layerID := layer.Image.Parent
-		layer, err := LayerCache().Get(layerID)
+		layerID = layer.Image.Parent
+		layer, err = LayerCache().Get(layerID)
 		if err != nil {
 			return fmt.Errorf("Unable to get metadata for layer %s", layerID)
 		}
 
 		layersHistory = append(layersHistory, layer)
 	}
+
+	log.Infof("streamMap = %#v", pusher.streamMap)
 
 	// Create a docker image from our (VIC's) image config
 	_, configDigest, configSize, err := ic.dockerImageFromVicImage(layersHistory)
@@ -712,21 +728,23 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 
 	// calculate image ID
 	log.Infof("Image ID: sha256:%s", configDigest)
-	// configSize := len([]byte(imageConfig))
-	// configDigest := "sha256:" + sha256.Sum256([]byte(config))
+	digest := "sha256:" + digest.Digest(configDigest)
 
-	// build out Schema2Manifest with all generated components
-	pusher.schema2Manifest = schema2.Manifest{
-		Versioned: manifest.Versioned{
-			SchemaVersion: 2,
-			MediaType:     schema2.MediaTypeManifest,
-		},
+	// build out PushManifest with all generated components
+	pusher.PushManifest = schema2.Manifest{
+		Versioned: schema2.SchemaVersion,
+		// Versioned: manifest.Versioned{
+		// 	SchemaVersion: 2,
+		// 	MediaType:     schema2.MediaTypeManifest,
+		// },
 		Config: distribution.Descriptor{
 			MediaType: schema2.MediaTypeImageConfig,
 			Size:      configSize,
-			Digest:    digest.Digest(configDigest),
+			Digest:    digest,
 		},
 	}
+
+	log.Infof("schema 2 manifest: %#v", pusher.PushManifest)
 
 	return nil
 }
@@ -734,6 +752,8 @@ func (ic *ImageC) PrepareManifestAndLayers() error {
 // FinalizeManifest builds the layer information in the manifest.  This information cannot
 // be determined till the layer tar streams were read and pushed.
 func (ic *ImageC) FinalizeManifest() error {
+	defer trace.End(trace.Begin(""))
+
 	pusher := ic.Pusher
 
 	var layers []distribution.Descriptor
@@ -747,7 +767,9 @@ func (ic *ImageC) FinalizeManifest() error {
 		layers = append(layers, layer)
 	}
 
-	pusher.schema2Manifest.Layers = layers
+	pusher.PushManifest.Layers = layers
+
+	log.Infof("Final manifest = %#v", pusher.PushManifest)
 
 	return nil
 }
@@ -890,26 +912,17 @@ func (ic *ImageC) dockerImageFromVicImage(images []*ImageWithMeta) (*docker.Imag
 // archive stream reads the layer data from the portlayer.  It is written to a temp file
 // in order to obtain the digest before actual upload.
 func (p *Pusher) GetReaderForLayer(layerID string) (*ArchiveStream, io.ReadCloser, error) {
-	stream, ok := p.streamMap[layerID]
-	if ok && stream != nil {
-		return nil, nil, fmt.Errorf("Stream for layer %s already in use", layerID)
-	}
+	defer trace.End(trace.Begin(layerID))
 
-	if stream == nil {
-		stream = &ArchiveStream{}
+	stream, ok := p.streamMap[layerID]
+	if !ok {
+		return nil, nil, fmt.Errorf("Couldn't find stream for layer %s", layerID)
 	}
 
 	// Check if we have a function to retrieve the stream
 	if p.ArchiveReader == nil {
 		return nil, nil, fmt.Errorf("No archive reader function provided to ImageC")
 	}
-
-	defer func() {
-		if stream.layerFile != nil {
-			// Must have succeeded
-			p.streamMap[layerID] = stream
-		}
-	}()
 
 	//Initialize an archive stream from the portlayer for the layer
 	ar, err := p.ArchiveReader(context.Background(), layerID, p.streamMap[layerID].parentLayerID)

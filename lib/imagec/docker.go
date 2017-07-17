@@ -298,6 +298,8 @@ func FetchImageBlob(ctx context.Context, options Options, image *ImageWithMeta, 
 
 	progress.Update(progressOutput, image.String(), "Download complete")
 
+	log.Infof("Layer %s blobsum, diff id = (%s, %s)", id, layer, diffID)
+
 	return diffID, nil
 }
 
@@ -401,7 +403,7 @@ func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schem
 		log.Errorf("Schema 1 push not supported")
 	case 2: //schema 2
 		reqHeaders.Add("Content-Type", schema2.MediaTypeManifest)
-		dataReader, err = getManifestSchema2Reader(options, pusher.schema2Manifest)
+		dataReader, err = getManifestSchema2Reader(options, pusher.PushManifest)
 		if err != nil {
 			log.Errorf("Failed to read manifest schema 2: %s", err.Error())
 		}
