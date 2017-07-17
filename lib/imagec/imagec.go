@@ -79,8 +79,8 @@ func NewImageC(options Options, strfmtr *streamformatter.StreamFormatter, getArc
 		sf:             strfmtr,
 		progressOutput: strfmtr.NewProgressOutput(options.Outstream, false),
 		Pusher: Pusher{
-			streamMap:     make(map[string]*ArchiveStream),
 			ArchiveReader: getArchiveReader,
+			streamMap:    make(map[string]*ArchiveStream),
 		},
 	}
 }
@@ -270,12 +270,16 @@ func (ic *ImageC) LayersToDownload() ([]*ImageWithMeta, error) {
 		if err := json.Unmarshal([]byte(history.V1Compatibility), &v1); err != nil {
 			return nil, fmt.Errorf("Failed to unmarshall image history: %s", err)
 		}
+		log.Debugf("-------layer: %s", layer.BlobSum)
+		log.Debugf("-------history: %+v", v1)
 
 		// if parent is empty set it to scratch
 		parent := "scratch"
 		if v1.Parent != "" {
 			parent = v1.Parent
 		}
+
+		log.Debugf("--------parent: %s", parent)
 
 		// add image to ImageWithMeta list
 		images[i] = &ImageWithMeta{
