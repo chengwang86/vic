@@ -556,7 +556,7 @@ func PushImageBlob(ctx context.Context, options Options, po progress.Output) (er
 	})
 
 	//bigBuff := make([]byte, 10240000)
-	bigBuff := []byte("This is not not not real data")
+	bigBuff := []byte("This is n11 real data")
 	err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
 	if err != nil {
 		return err
@@ -787,7 +787,12 @@ func ObtainRepoList(options Options, po progress.Output) ([]string, error) {
 		RootCAs:            options.RegistryCAs,
 	})
 
-	hdr, _, err := transporter.Get(ctx, url, nil, po)
+	hdr, rdr, err := transporter.Get(ctx, url, nil, po)
+	defer func() {
+		if rdr != nil {
+			rdr.Close()
+		}
+	} ()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch auth url for ObtainRepoList: %s", err)
 	}
@@ -813,26 +818,19 @@ func ObtainRepoList(options Options, po progress.Output) ([]string, error) {
 		Token:              token,
 	})
 
-	_, rdr, err := newTransporter.Get(ctx, url, nil, po)
+	_, data, err := newTransporter.GetBytes(ctx, url, nil, po)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch repo list: %s", err)
 	}
-	defer rdr.Close()
 
 	if newTransporter.IsStatusOK() {
 		log.Debugf("ObtainRepoList: %+v", rdr)
 
-		out := bytes.NewBuffer(nil)
 
-		// Stream into it
-		_, err = io.Copy(out, rdr)
-		if err != nil {
-			return nil, err
-		}
-
+		log.Debugf("The rdr is: %+v", rdr)
 		var dat map[string][]string
 
-		if err = json.Unmarshal(out.Bytes(), &dat); err != nil {
+		if err = json.Unmarshal(data, &dat); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal repo list: %s", err)
 		}
 

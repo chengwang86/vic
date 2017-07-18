@@ -45,6 +45,7 @@ type Transporter interface {
 	Delete(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error)
 	Head(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, error)
 	Get(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, io.ReadCloser, error)
+	GetBytes(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, []byte, error)
 
 	IsStatusUnauthorized() bool
 	IsStatusOK() bool
@@ -119,6 +120,21 @@ func (u *URLTransporter) Get(ctx context.Context, url *url.URL, reqHdrs *http.He
 	return u.requestWithRetry(ctx, url, nil, reqHdrs, "GET", po)
 }
 
+func (u *URLTransporter) GetBytes(ctx context.Context, url *url.URL, reqHdrs *http.Header, po progress.Output) (http.Header, []byte, error) {
+	hdr, rdr, err := u.requestWithRetry(ctx, url, nil, reqHdrs, "GET", po)
+
+	defer rdr.Close()
+
+	out := bytes.NewBuffer(nil)
+
+	// Stream into it
+	_, err = io.Copy(out, rdr)
+	if err != nil {
+		return nil, nil, err
+	}
+	return hdr, out.Bytes(), err
+}
+
 func (u *URLTransporter) request(ctx context.Context, url *url.URL, body io.Reader, reqHdrs *http.Header, operation string, po progress.Output) (http.Header, io.ReadCloser, error) {
 	req, err := http.NewRequest(operation, url.String(), body)
 	if err != nil {
@@ -145,7 +161,11 @@ func (u *URLTransporter) request(ctx context.Context, url *url.URL, body io.Read
 		return nil, nil, err
 	}
 
-	defer res.Body.Close()
+	defer func() {
+		if operation == http.MethodHead || operation == http.MethodDelete || operation == http.MethodPost || operation == http.MethodPut {
+			res.Body.Close()
+		}
+	}()
 
 	log.Debugf("URLTransporter.request() - statuscode: %d, body: %#v, header: %#v", res.StatusCode, res.Body, res.Header)
 
