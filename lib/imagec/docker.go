@@ -832,6 +832,9 @@ func ObtainRepoList(transporter *urlfetcher.URLTransporter, options Options, po 
 		return nil, err
 	}
 
+	url.Path = path.Join(url.Path, "_catalog")
+	log.Debugf("obtainRepolist URL: %s", url)
+
 	_, rdr, err := transporter.Get(ctx, url, nil, po)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch repo list: %s", err)
