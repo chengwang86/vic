@@ -211,7 +211,7 @@ func TestLearnAuthURLForRepoList(t *testing.T) {
 		t.Errorf(err.Error())
 	}
 
-	if url.String() != "https://auth.docker.io/token?scope=registry%3Acatalog%3A%2A%2Cscope%3D%22registry%3Acatalog%3A%2A&service=registry.docker.io" {
+	if url.String() != "https://auth.docker.io/token?scope=registry%3Acatalog%3A%2A&service=registry.docker.io" {
 		t.Errorf("Returned url %s is different than expected", url)
 	}
 }
