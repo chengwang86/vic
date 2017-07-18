@@ -53,12 +53,6 @@ type Transporter interface {
 	Status() int
 
 	ExtractOAuthURL(hdr string, repository *url.URL) (*url.URL, error)
-	//CompletedUpload(ctx context.Context, digest, uploadUrl string, po progress.Output) error
-	//UploadLayer(ctx context.Context, digest, uploadUrl string, layer io.Reader, po progress.Output, ids ...string) error
-	//CancelUpload(ctx context.Context, uploadUrl string, po progress.Output) error
-	//ObtainUploadUrl(ctx context.Context, registry *url.URL, image string, po progress.Output) (string, error)
-	//CheckLayerExistence(ctx context.Context, image, digest string, registry *url.URL, po progress.Output) (bool, error)
-	//MountBlobToRepo(ctx context.Context, registry *url.URL, digest, image, repo string, po progress.Output) (bool, string, error)
 }
 
 type URLTransporter struct {
@@ -361,7 +355,7 @@ func (u *URLTransporter) ExtractOAuthURL(hdr string, repository *url.URL) (*url.
 	return auth, nil
 }
 
-func UrlDeepCopy(src *url.URL) *url.URL {
+func URLDeepCopy(src *url.URL) *url.URL {
 	dest := &url.URL{
 		Scheme:     src.Scheme,
 		Opaque:     src.Opaque,
