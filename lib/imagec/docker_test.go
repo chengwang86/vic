@@ -15,6 +15,7 @@
 package imagec
 
 import (
+	"encoding/json"
 	"testing"
 
 	"net/http"
@@ -570,53 +571,53 @@ func TestMountBlobToRepo(t *testing.T) {
 }
 
 // TODO: this unit test has to be fixed
-//func TestObtainRepoList(t *testing.T) {
-//	var err error
-//
-//	options := Options{
-//		Outstream: os.Stdout,
-//	}
-//
-//	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
-//
-//	s := httptest.NewServer(
-//		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//			fmt.Println("The request url is: ", r.URL.String())
-//			if strings.Contains(r.URL.String(), "catalog") {
-//				data := make(map[string][]string)
-//				data["repositories"] = []string{RepoMounted}
-//				repoData, _ := json.Marshal(data)
-//				fmt.Println("The repositories: ", data)
-//
-//				w.Write(repoData)
-//				w.Header().Set("Content-Type", "application/json")
-//				w.WriteHeader(http.StatusOK)
-//			} else {
-//				w.WriteHeader(http.StatusBadRequest)
-//			}
-//		}))
-//	defer s.Close()
-//
-//	ic.Options.Registry = s.URL
-//	ic.Options.Image = MockImage
-//	ic.Options.Tag = Tag
-//	ic.Options.Timeout = DefaultHTTPTimeout
-//	ic.Options.Reference, err = reference.ParseNamed(Reference)
-//	if err != nil {
-//		t.Errorf(err.Error())
-//	}
-//
-//	transporterForRepoList := urlfetcher.NewURLTransporter(urlfetcher.Options{
-//		Timeout:            ic.Options.Timeout,
-//		Username:           ic.Options.Username,
-//		Password:           ic.Options.Password,
-//		Token:              ic.Options.Token,
-//		InsecureSkipVerify: ic.Options.InsecureSkipVerify,
-//		RootCAs:            ic.Options.RegistryCAs,
-//	})
-//
-//	repoList, err := ObtainRepoList(transporterForRepoList, ic.Options, ic.progressOutput)
-//	assert.NoError(t, err, "ObtainRepoList is expected to succeed!")
-//	assert.Equal(t, 1, len(repoList), "One repository should have been returned")
-//	assert.Equal(t, RepoMounted, repoList[0], "The repo %s should have been returned!", repoList[0])
-//}
+func TestObtainRepoList(t *testing.T) {
+	var err error
+
+	options := Options{
+		Outstream: os.Stdout,
+	}
+
+	ic := NewImageC(options, streamformatter.NewJSONStreamFormatter(), nil)
+
+	s := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Println("The request url is: ", r.URL.String())
+			if strings.Contains(r.URL.String(), "catalog") {
+				data := make(map[string][]string)
+				data["repositories"] = []string{RepoMounted}
+				repoData, _ := json.Marshal(data)
+				fmt.Println("The repositories: ", data)
+
+				w.Write(repoData)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+	defer s.Close()
+
+	ic.Options.Registry = s.URL
+	ic.Options.Image = MockImage
+	ic.Options.Tag = Tag
+	ic.Options.Timeout = DefaultHTTPTimeout
+	ic.Options.Reference, err = reference.ParseNamed(Reference)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	transporterForRepoList := urlfetcher.NewURLTransporter(urlfetcher.Options{
+		Timeout:            ic.Options.Timeout,
+		Username:           ic.Options.Username,
+		Password:           ic.Options.Password,
+		Token:              ic.Options.Token,
+		InsecureSkipVerify: ic.Options.InsecureSkipVerify,
+		RootCAs:            ic.Options.RegistryCAs,
+	})
+
+	repoList, err := ObtainRepoList(transporterForRepoList, ic.Options, ic.progressOutput)
+	assert.NoError(t, err, "ObtainRepoList is expected to succeed!")
+	assert.Equal(t, 1, len(repoList), "One repository should have been returned")
+	assert.Equal(t, RepoMounted, repoList[0], "The repo %s should have been returned!", repoList[0])
+}
