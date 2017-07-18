@@ -336,8 +336,10 @@ func (u *URLTransporter) ExtractOAuthURL(hdr string, repository *url.URL) (*url.
 		}
 		if strings.HasPrefix(token, "scope") {
 			scope = strings.Trim(token[len("scope="):], "\"")
-			scope += ","
-			scope += strings.Trim(tokens[len(tokens)-1], "\"")
+			if len(tokens) == 4 {
+				scope += ","
+				scope += strings.Trim(tokens[len(tokens)-1], "\"")
+			}
 		}
 	}
 

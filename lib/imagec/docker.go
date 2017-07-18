@@ -556,7 +556,7 @@ func PushImageBlob(ctx context.Context, options Options, po progress.Output) (er
 	})
 
 	//bigBuff := make([]byte, 10240000)
-	bigBuff := []byte("This is not real data")
+	bigBuff := []byte("This is not not not real data")
 	err = ioutil.WriteFile("layer.tar", bigBuff, 0666)
 	if err != nil {
 		return err
@@ -571,6 +571,7 @@ func PushImageBlob(ctx context.Context, options Options, po progress.Output) (er
 	diffIDSum := sha256.New()
 	diffIDSum.Write([]byte(layer))
 	pushDigest := fmt.Sprintf("sha256:%x", diffIDSum.Sum(nil))
+	//pushDigest = "sha256:45b23dee08af5e43a7fea6c4cf9c25ccf269ee113168c19722f87876677c5cb2"
 	log.Infof("The calculated tar digest for the mock data is: %s", pushDigest)
 
 	log.Debugf("Checking for presence of layer %s (%s) in %s", diffID, pushDigest, options.Image)
