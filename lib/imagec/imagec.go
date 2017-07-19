@@ -526,8 +526,11 @@ func (ic *ImageC) PullImage() error {
 	}
 
 	// update the v2metaData of all layers
-	if err := ic.UpdateV2MetaData(); err != nil {
+	if err := UpdateV2MetaData(ic.Reference, ic.Reference.FullName()); err != nil {
 		log.Errorf("Failed to update v2MetaData: %s", err)
+	}
+	if err := LayerCache().Save(); err != nil {
+		log.Errorf("Failed to persist v2MetaData to kv store: %s", err)
 	}
 
 	return nil
@@ -567,8 +570,11 @@ func (ic *ImageC) PushImage() error {
 	}
 
 	// update the v2metaData of all layers
-	if err := ic.UpdateV2MetaData(); err != nil {
+	if err := UpdateV2MetaData(ic.Reference, ic.Reference.FullName()); err != nil {
 		log.Errorf("Failed to update v2MetaData: %s", err)
+	}
+	if err := LayerCache().Save(); err != nil {
+		log.Errorf("Failed to persist v2MetaData to kv store: %s", err)
 	}
 
 	return nil
@@ -1050,10 +1056,10 @@ func (a *ArchiveStream) Close() {
 //	return nil
 //}
 
-func (ic *ImageC) UpdateV2MetaData() error {
-	defer trace.End(trace.Begin(ic.Reference.FullName()))
+func UpdateV2MetaData(imageRef reference.Named, newSourceRepo string) error {
+	defer trace.End(trace.Begin(newSourceRepo))
 
-	id, err := cache.RepositoryCache().Get(ic.Options.Reference)
+	id, err := cache.RepositoryCache().Get(imageRef)
 	if err != nil {
 		return fmt.Errorf("Could not retrieve image id from repository cache using reference: %s", err)
 	}
@@ -1070,7 +1076,7 @@ func (ic *ImageC) UpdateV2MetaData() error {
 	for {
 		if layer.V2Meta != nil {
 			for _, m := range layer.V2Meta {
-				if m.SourceRepository == ic.Reference.FullName() {
+				if m.SourceRepository == newSourceRepo {
 					sourceRepoExist = true
 				}
 			}
@@ -1081,7 +1087,7 @@ func (ic *ImageC) UpdateV2MetaData() error {
 				layer.V2Meta = layer.V2Meta[1:]
 			}
 			layer.V2Meta = append(layer.V2Meta, dmetadata.V2Metadata{
-				SourceRepository: ic.Reference.FullName(),
+				SourceRepository: newSourceRepo,
 			})
 			LayerCache().Add(layer)
 		}

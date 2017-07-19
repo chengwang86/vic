@@ -621,7 +621,7 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 				return fmt.Errorf("failed during CrossRepoBlobMount: %s", err)
 			}
 			if mounted {
-				progress.Update(po, layerID, "Layer already mounted")
+				progress.Update(po, layerID, "Layer mounted")
 				return nil
 			}
 		}
@@ -636,15 +636,10 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 	}
 	log.Infof("The upload url is: %s", uploadURL)
 
-	defer func() {
-		if err != nil {
-			if err2 := CancelUpload(ctx, transporter, uploadURL, po); err2 != nil {
-				log.Errorf("Failed during CancelUpload: %s", err2)
-			}
-		}
-	}()
-
 	if err = UploadLayer(ctx, transporter, pushDigest, uploadURL, layerReader, po); err != nil {
+		if err2 := CancelUpload(ctx, transporter, uploadURL, po); err2 != nil {
+			log.Errorf("Failed during CancelUpload: %s", err2)
+		}
 		return err
 	}
 	progress.Update(po, layerID, "Pushed")
