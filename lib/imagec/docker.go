@@ -50,6 +50,8 @@ const (
 	// DigestSHA256EmptyTar is the canonical sha256 digest of empty tar file -
 	// (1024 NULL bytes)
 	DigestSHA256EmptyTar = string(dlayer.DigestSHA256EmptyTar)
+
+	MaxMountAttempts = 4
 )
 
 // FSLayer is a container struct for BlobSums defined in an image manifest
@@ -588,27 +590,28 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 		return nil
 	}
 
-	// obtain a list of repositories for cross repo blob mount
-	oauthURL, err := LearnAuthURLForRepoList(options, po)
-	if err != nil {
-		return err
-	}
+	//// obtain a list of repositories for cross repo blob mount
+	//oauthURL, err := LearnAuthURLForRepoList(options, po)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//token, err := FetchToken(ctx, options, oauthURL, po)
+	//if err != nil {
+	//	return fmt.Errorf("failed to fetch OAuth token: %s", err)
+	//}
+	//
+	//transporterForRepoList := urlfetcher.NewURLTransporter(urlfetcher.Options{
+	//	Timeout:            options.Timeout,
+	//	Username:           options.Username,
+	//	Password:           options.Password,
+	//	Token:              token,
+	//	InsecureSkipVerify: options.InsecureSkipVerify,
+	//	RootCAs:            options.RegistryCAs,
+	//})
 
-	token, err := FetchToken(ctx, options, oauthURL, po)
-	if err != nil {
-		return fmt.Errorf("failed to fetch OAuth token: %s", err)
-	}
-
-	transporterForRepoList := urlfetcher.NewURLTransporter(urlfetcher.Options{
-		Timeout:            options.Timeout,
-		Username:           options.Username,
-		Password:           options.Password,
-		Token:              token,
-		InsecureSkipVerify: options.InsecureSkipVerify,
-		RootCAs:            options.RegistryCAs,
-	})
-
-	repoList, err := ObtainRepoList(transporterForRepoList, options, po)
+	//repoList, err := ObtainRepoList(transporterForRepoList, options, po)
+	repoList, err := ObtainSourceRepoList(as.layerID, options.Reference)
 	if err != nil {
 		log.Errorf("Failed to fetch repo list: %s", err)
 	} else {
@@ -647,6 +650,47 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 	progress.Update(po, layerID, "Pushed")
 
 	return nil
+}
+
+func ObtainSourceRepoList(layerID string, targetRepo reference.Named) ([]string, error) {
+	defer trace.End(trace.Begin(layerID))
+
+	layer, err := LayerCache().Get(layerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain source repo list: %s", err)
+	}
+	if layer.V2Meta == nil || len(layer.V2Meta) == 0 {
+		log.Debugf("layer.V2Meta does not exist or is empty")
+		return nil, nil
+	}
+
+	var repoList []string
+	var repo string
+
+	for _, meta := range layer.V2Meta {
+		repo = meta.SourceRepository
+
+		// Do not consider repos not in the same registry
+		sourceRepo, err := reference.ParseNamed(meta.SourceRepository)
+		if err != nil || targetRepo.Hostname() != sourceRepo.Hostname() {
+			continue
+		}
+		// Do not consider the target repository
+		if repo == targetRepo.FullName() {
+			continue
+		}
+		repoList = append(repoList, repo)
+	}
+
+	if repoList != nil && len(repoList) > MaxMountAttempts {
+		repoList = repoList[:MaxMountAttempts-1]
+	}
+
+	if repoList != nil {
+		log.Debugf("RepoList: %+v", repoList)
+	}
+
+	return repoList, nil
 }
 
 func CrossRepoBlobMount(ctx context.Context, layerID, digest string, options Options, repoList []string, po progress.Output) (bool, error) {

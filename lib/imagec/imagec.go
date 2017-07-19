@@ -34,6 +34,7 @@ import (
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/manifest/schema2"
+	dmetadata "github.com/docker/docker/distribution/metadata"
 	docker "github.com/docker/docker/image"
 	dockerLayer "github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/ioutils"
@@ -54,6 +55,8 @@ import (
 const (
 	PushImage = "pushImage"
 	PullImage = "pullImage"
+
+	MaxV2MetaDataEntries = 10
 )
 
 // ImageC is responsible for pulling docker images from a repository
@@ -80,7 +83,7 @@ func NewImageC(options Options, strfmtr *streamformatter.StreamFormatter, getArc
 		progressOutput: strfmtr.NewProgressOutput(options.Outstream, false),
 		Pusher: Pusher{
 			ArchiveReader: getArchiveReader,
-			streamMap:    make(map[string]*ArchiveStream),
+			streamMap:     make(map[string]*ArchiveStream),
 		},
 	}
 }
@@ -137,6 +140,8 @@ type ImageWithMeta struct {
 	Size   int64
 
 	Downloading bool
+
+	V2Meta []dmetadata.V2Metadata
 }
 
 // ArchiveStream is used during image push
@@ -270,16 +275,12 @@ func (ic *ImageC) LayersToDownload() ([]*ImageWithMeta, error) {
 		if err := json.Unmarshal([]byte(history.V1Compatibility), &v1); err != nil {
 			return nil, fmt.Errorf("Failed to unmarshall image history: %s", err)
 		}
-		log.Debugf("-------layer: %s", layer.BlobSum)
-		log.Debugf("-------history: %+v", v1)
 
 		// if parent is empty set it to scratch
 		parent := "scratch"
 		if v1.Parent != "" {
 			parent = v1.Parent
 		}
-
-		log.Debugf("--------parent: %s", parent)
 
 		// add image to ImageWithMeta list
 		images[i] = &ImageWithMeta{
@@ -524,6 +525,11 @@ func (ic *ImageC) PullImage() error {
 		return err
 	}
 
+	// update the v2metaData of all layers
+	if err := ic.UpdateV2MetaData(); err != nil {
+		log.Errorf("Failed to update v2MetaData: %s", err)
+	}
+
 	return nil
 }
 
@@ -556,9 +562,14 @@ func (ic *ImageC) PushImage() error {
 	}
 
 	// Push up the image manifest
-	 if err := ic.pushManifest(ctx); err != nil {
-	 	return err
-	 }
+	if err := ic.pushManifest(ctx); err != nil {
+		return err
+	}
+
+	// update the v2metaData of all layers
+	if err := ic.UpdateV2MetaData(); err != nil {
+		log.Errorf("Failed to update v2MetaData: %s", err)
+	}
 
 	return nil
 }
@@ -812,7 +823,7 @@ func (ic *ImageC) pushManifest(ctx context.Context) error {
 	//	return fmt.Errorf("attempt to push manifest when non exist")
 	//}
 	if err := PutImageManifest(ctx, ic.Pusher, ic.Options, 2, ic.progressOutput); err != nil {
-			return err
+		return err
 	}
 
 	return nil
@@ -1009,3 +1020,84 @@ func (a *ArchiveStream) Close() {
 
 // 	p.streamMap = nil
 // }
+
+//func UpdateV2MetaData(layerID string, meta dmetadata.V2Metadata) error {
+//	defer trace.End(trace.Begin(layerID))
+//
+//	layer, err := LayerCache().Get(layerID)
+//	if err != nil {
+//		return err
+//	}
+//
+//	var sourceRepoExist bool
+//	if layer.V2Meta != nil {
+//		for _, m := range layer.V2Meta {
+//			if m.SourceRepository == meta.SourceRepository {
+//				sourceRepoExist = true
+//			}
+//		}
+//	}
+//	if !sourceRepoExist {
+//
+//		if len(layer.V2Meta) == MaxV2MetaDataEntries {
+//			// remove the oldest entry - the first one in the array
+//			layer.V2Meta = layer.V2Meta[1:]
+//		}
+//		layer.V2Meta = append(layer.V2Meta, meta)
+//		log.Debugf("V2Meta: %+v", layer.V2Meta)
+//		LayerCache().Add(layer)
+//	}
+//	return nil
+//}
+
+func (ic *ImageC) UpdateV2MetaData() error {
+	defer trace.End(trace.Begin(ic.Reference.FullName()))
+
+	id, err := cache.RepositoryCache().Get(ic.Options.Reference)
+	if err != nil {
+		return fmt.Errorf("Could not retrieve image id from repository cache using reference: %s", err)
+	}
+
+	layerID := cache.RepositoryCache().GetLayerID(id)
+
+	layer, err := LayerCache().Get(layerID)
+	if err != nil {
+		return fmt.Errorf("Unable to get top layer id for image %s", id)
+	}
+
+	var sourceRepoExist bool
+
+	for {
+		if layer.V2Meta != nil {
+			for _, m := range layer.V2Meta {
+				if m.SourceRepository == ic.Reference.FullName() {
+					sourceRepoExist = true
+				}
+			}
+		}
+		if !sourceRepoExist {
+			if len(layer.V2Meta) == MaxV2MetaDataEntries {
+				// remove the oldest entry - the first one in the array
+				layer.V2Meta = layer.V2Meta[1:]
+			}
+			layer.V2Meta = append(layer.V2Meta, dmetadata.V2Metadata{
+				SourceRepository: ic.Reference.FullName(),
+			})
+			LayerCache().Add(layer)
+		}
+		log.Debugf("layer: %s, V2Meta: %+v", layer.ID, layer.V2Meta)
+
+		// Check for scratch ID
+		if layer.Image.Parent == storage.Scratch.ID {
+			break
+		}
+
+		// set the layer to the parent layer
+		layerID = layer.Image.Parent
+		layer, err = LayerCache().Get(layerID)
+
+		sourceRepoExist = false
+	}
+
+	return nil
+}
