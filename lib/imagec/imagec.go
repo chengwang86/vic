@@ -1084,14 +1084,21 @@ func UpdateV2MetaData(imageRef reference.Named, newSourceRepo string) error {
 		if !sourceRepoExist {
 			if len(layer.V2Meta) == MaxV2MetaDataEntries {
 				// remove the oldest entry - the first one in the array
-				layer.V2Meta = layer.V2Meta[1:]
+				//layer.V2Meta = layer.V2Meta[1:]
+				layer.V2Meta = append(layer.V2Meta[1:])
 			}
 			layer.V2Meta = append(layer.V2Meta, dmetadata.V2Metadata{
 				SourceRepository: newSourceRepo,
 			})
 			LayerCache().Add(layer)
+
+
 		}
-		log.Debugf("layer: %s, V2Meta: %+v", layer.ID, layer.V2Meta)
+
+		temp, _ := LayerCache().Get(layer.ID)
+		log.Debugf("layer: %s, V2Meta: %+v", temp.ID, temp.V2Meta)
+
+		log.Debugf("layer.Image.Parent: %s", layer.Image.Parent)
 
 		// Check for scratch ID
 		if layer.Image.Parent == storage.Scratch.ID {
@@ -1101,6 +1108,9 @@ func UpdateV2MetaData(imageRef reference.Named, newSourceRepo string) error {
 		// set the layer to the parent layer
 		layerID = layer.Image.Parent
 		layer, err = LayerCache().Get(layerID)
+		if err != nil {
+			return err
+		}
 
 		sourceRepoExist = false
 	}

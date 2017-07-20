@@ -674,7 +674,7 @@ func ObtainSourceRepoList(layerID string, targetRepo reference.Named) ([]string,
 		if repo == targetRepo.FullName() {
 			continue
 		}
-		repoList = append(repoList, repo)
+		repoList = append(repoList, sourceRepo.RemoteName())
 	}
 
 	if repoList != nil && len(repoList) > MaxMountAttempts {
