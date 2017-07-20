@@ -23,6 +23,7 @@ import (
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/vmware/vic/pkg/trace"
+	"github.com/docker/docker/layer"
 )
 
 // LayerUploader uploads layers
@@ -138,7 +139,7 @@ func (lum *LayerUploader) makeUploadFunc(ic *ImageC, layerID string) xfer.DoFunc
 			// PutImageBlob will handle retries and backoff
 			err := PushImageBlob(u.Transfer.Context(), ic.Options, aStream, reader, progressOutput)
 			if err != nil {
-				// log.Errorf("Error pushing image blob for %s/%s: %s", ic.Image, layer.ID, err)
+				log.Errorf("Error pushing image blob for %s/%s: %s", ic.Image, aStream.layerID, err)
 				return
 			}
 		}()

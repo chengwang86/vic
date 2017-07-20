@@ -1091,8 +1091,6 @@ func UpdateV2MetaData(imageRef reference.Named, newSourceRepo string) error {
 				SourceRepository: newSourceRepo,
 			})
 			LayerCache().Add(layer)
-
-
 		}
 
 		temp, _ := LayerCache().Get(layer.ID)
