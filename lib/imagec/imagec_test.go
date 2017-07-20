@@ -751,7 +751,6 @@ func TestPrepareManifestAndLayers(t *testing.T) {
 }
 
 func TestUpdateV2MetaData(t *testing.T) {
-	logrus.SetLevel(logrus.DebugLevel)
 	layerCache = &LCache{
 		layers: make(map[string]*ImageWithMeta),
 	}
