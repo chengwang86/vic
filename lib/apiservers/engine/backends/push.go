@@ -29,11 +29,6 @@ func (i *Image) PushImage(ctx context.Context, image, tag string, metaHeaders ma
 	// return fmt.Errorf("%s does not yet implement image.PushImage", ProductName())
 	defer trace.End(trace.Begin(fmt.Sprintf("%s:%s", image, tag)))
 
-	_, err := cache.ImageCache().Get(image)
-	if err != nil {
-		return ImageNotFoundError(image, tag)
-	}
-
 	log.Debugf("PushImage: image = %s, tag = %s, metaheaders = %+v\n, authConfig = %+v\n", image, tag, metaHeaders, authConfig)
 
 	//***** Code from Docker 1.13 PullImage to convert image and tag to a ref
@@ -58,6 +53,16 @@ func (i *Image) PushImage(ctx context.Context, image, tag string, metaHeaders ma
 		}
 	}
 	//*****
+
+	// make sure the image exists in cache before push
+	id, err := cache.RepositoryCache().Get(ref)
+	if err != nil {
+		return fmt.Errorf("Could not retrieve image id from repository cache using reference %s: %s", ref, err)
+	}
+	_, err = cache.ImageCache().Get(id)
+	if err != nil {
+		return ImageNotFoundError(id, tag)
+	}
 
 	// create url from hostname
 	hostnameURL, err := url.Parse(ref.Hostname())
