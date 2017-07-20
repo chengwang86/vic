@@ -1080,6 +1080,8 @@ func UpdateV2MetaData(imageRef reference.Named, newSourceRepo string) error {
 					sourceRepoExist = true
 				}
 			}
+		} else {
+			layer.V2Meta = []dmetadata.V2Metadata{{}}
 		}
 		if !sourceRepoExist {
 			if len(layer.V2Meta) == MaxV2MetaDataEntries {
