@@ -784,36 +784,36 @@ func LearnAuthURLForPush(options Options, po progress.Output) (*url.URL, error) 
 	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), url)
 }
 
-func LearnAuthURLForRepoList(options Options, po progress.Output) (*url.URL, error) {
-	defer trace.End(trace.Begin(options.Reference.String()))
-
-	url, err := url.Parse(options.Registry)
-	if err != nil {
-		return nil, err
-	}
-
-	url.Path = path.Join(url.Path, "_catalog")
-	log.Debugf("obtainRepolist URL: %s", url)
-
-	transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
-		Timeout:            options.Timeout,
-		Username:           options.Username,
-		Password:           options.Password,
-		InsecureSkipVerify: options.InsecureSkipVerify,
-		RootCAs:            options.RegistryCAs,
-	})
-
-	hdr, err := transporter.GetHeaderOnly(ctx, url, nil, po)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch auth url for ObtainRepoList: %s", err)
-	}
-
-	if err == nil && transporter.IsStatusUnauthorized() {
-		return transporter.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
-	}
-
-	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), url)
-}
+//func LearnAuthURLForRepoList(options Options, po progress.Output) (*url.URL, error) {
+//	defer trace.End(trace.Begin(options.Reference.String()))
+//
+//	url, err := url.Parse(options.Registry)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	url.Path = path.Join(url.Path, "_catalog")
+//	log.Debugf("obtainRepolist URL: %s", url)
+//
+//	transporter := urlfetcher.NewURLTransporter(urlfetcher.Options{
+//		Timeout:            options.Timeout,
+//		Username:           options.Username,
+//		Password:           options.Password,
+//		InsecureSkipVerify: options.InsecureSkipVerify,
+//		RootCAs:            options.RegistryCAs,
+//	})
+//
+//	hdr, err := transporter.GetHeaderOnly(ctx, url, nil, po)
+//	if err != nil {
+//		return nil, fmt.Errorf("failed to fetch auth url for ObtainRepoList: %s", err)
+//	}
+//
+//	if err == nil && transporter.IsStatusUnauthorized() {
+//		return transporter.ExtractOAuthURL(hdr.Get("www-authenticate"), url)
+//	}
+//
+//	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), url)
+//}
 
 func LearnAuthURLForBlobMount(options Options, digest, repo string, po progress.Output) (*url.URL, error) {
 	defer trace.End(trace.Begin(options.Reference.String()))
@@ -862,42 +862,42 @@ func LearnAuthURLForBlobMount(options Options, digest, repo string, po progress.
 	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), composedURL)
 }
 
-func ObtainRepoList(transporter *urlfetcher.URLTransporter, options Options, po progress.Output) ([]string, error) {
-	defer trace.End(trace.Begin(options.Reference.String()))
-
-	url, err := url.Parse(options.Registry)
-	if err != nil {
-		return nil, err
-	}
-
-	url.Path = path.Join(url.Path, "_catalog")
-	log.Debugf("obtainRepolist URL: %s", url)
-
-	_, data, err := transporter.GetBytes(ctx, url, nil, po)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch repo list: %s", err)
-	}
-
-	if transporter.IsStatusOK() {
-		log.Debugf("ObtainRepoList: %+v", data)
-
-		var dat map[string][]string
-
-		if err = json.Unmarshal(data, &dat); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal repo list: %s", err)
-		}
-
-		log.Debugf("The repo list is %+v", dat["repositories"])
-		return dat["repositories"], nil
-	}
-
-	if transporter.IsStatusUnauthorized() {
-		// it is possible that the current user does not have enough permission, so return nil
-		return nil, nil
-	}
-
-	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), url)
-}
+//func ObtainRepoList(transporter *urlfetcher.URLTransporter, options Options, po progress.Output) ([]string, error) {
+//	defer trace.End(trace.Begin(options.Reference.String()))
+//
+//	url, err := url.Parse(options.Registry)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	url.Path = path.Join(url.Path, "_catalog")
+//	log.Debugf("obtainRepolist URL: %s", url)
+//
+//	_, data, err := transporter.GetBytes(ctx, url, nil, po)
+//	if err != nil {
+//		return nil, fmt.Errorf("failed to fetch repo list: %s", err)
+//	}
+//
+//	if transporter.IsStatusOK() {
+//		log.Debugf("ObtainRepoList: %+v", data)
+//
+//		var dat map[string][]string
+//
+//		if err = json.Unmarshal(data, &dat); err != nil {
+//			return nil, fmt.Errorf("failed to unmarshal repo list: %s", err)
+//		}
+//
+//		log.Debugf("The repo list is %+v", dat["repositories"])
+//		return dat["repositories"], nil
+//	}
+//
+//	if transporter.IsStatusUnauthorized() {
+//		// it is possible that the current user does not have enough permission, so return nil
+//		return nil, nil
+//	}
+//
+//	return nil, fmt.Errorf("Unexpected http code: %d, URL: %s", transporter.Status(), url)
+//}
 
 // PutImageManifest simply pushes the manifest up to the registry.
 func PutImageManifest(ctx context.Context, pusher Pusher, options Options, schemaVersion int, progressOutput progress.Output) error {

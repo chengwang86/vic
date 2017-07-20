@@ -23,7 +23,6 @@ import (
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/vmware/vic/pkg/trace"
-	"github.com/docker/docker/layer"
 )
 
 // LayerUploader uploads layers

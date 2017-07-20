@@ -43,8 +43,6 @@ import (
 	"github.com/vmware/vic/lib/apiservers/engine/backends/cache"
 	"github.com/vmware/vic/lib/portlayer/storage"
 	"github.com/vmware/vic/pkg/uid"
-	"fmt"
-	"github.com/Sirupsen/logrus"
 )
 
 const (
@@ -794,12 +792,6 @@ func TestUpdateV2MetaData(t *testing.T) {
 		t.Error(err.Error())
 	}
 
-	tmp, err := cache.RepositoryCache().Get(ref)
-	if err != nil {
-		t.Error(err.Error())
-	}
-	fmt.Println("tmp: ", tmp)
-
 	// try to update V2MetaData
 	newSourceRepo := "docker.io/library/busybox"
 
@@ -812,23 +804,11 @@ func TestUpdateV2MetaData(t *testing.T) {
 	}
 	assert.Equal(t, 1, len(l1.V2Meta), "The number of source repositories should be one!")
 
-	ll2, err := LayerCache().Get(layer2.ID)
-	if err != nil {
-		t.Error(err.Error())
-	}
-	fmt.Println("ll2: ", ll2.V2Meta)
-
 	// try to update V2MetaData
 	newSourceRepo = "docker.io/test/anotherBusybox"
 
 	err = UpdateV2MetaData(ref, newSourceRepo)
 	assert.NoError(t, err, "UpdataeV2MetaData failed: %s", err)
-
-	ll2, err = LayerCache().Get(layer2.ID)
-	if err != nil {
-		t.Error(err.Error())
-	}
-	fmt.Println("ll2: ", ll2.V2Meta)
 
 	l2, err := LayerCache().Get(layer2.ID)
 	if err != nil {
