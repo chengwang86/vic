@@ -621,7 +621,6 @@ func PushImageBlob(ctx context.Context, options Options, as *ArchiveStream, laye
 				return fmt.Errorf("failed during CrossRepoBlobMount: %s", err)
 			}
 			if mounted {
-				progress.Update(po, layerID, "Layer mounted")
 				return nil
 			}
 		}
@@ -736,6 +735,7 @@ func CrossRepoBlobMount(ctx context.Context, layerID, digest string, options Opt
 		}
 		if mounted {
 			progress.Updatef(po, layerID, "Mounted from %s", repo)
+			log.Debugf("Layer %s mounted from %s", layerID, repo)
 			break
 		}
 	}
