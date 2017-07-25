@@ -926,11 +926,11 @@ func (p *Pusher) GetReaderForLayer(layerID string) (*ArchiveStream, io.ReadClose
 	blobSum := sha256.New()
 	mw := io.MultiWriter(f, blobSum)
 	gzipWriter := gzip.NewWriter(mw)
-	defer func() {
-		if gzipWriter != nil {
-			gzipWriter.Close()
-		}
-	}()
+	//defer func() {
+	//	if gzipWriter != nil {
+	//		gzipWriter.Close()
+	//	}
+	//}()
 
 	written, err := io.Copy(gzipWriter, ar)
 	if err != io.EOF && err != nil {
@@ -943,7 +943,7 @@ func (p *Pusher) GetReaderForLayer(layerID string) (*ArchiveStream, io.ReadClose
 	}
 
 	// Close the file to finalize the gz file
-	gzipWriter.Flush()
+	gzipWriter.Close()
 	f.Sync()
 	f.Close()
 
