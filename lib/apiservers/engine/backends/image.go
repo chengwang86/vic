@@ -45,6 +45,7 @@ import (
 	"github.com/vmware/vic/pkg/vsphere/sys"
 
 	docker "github.com/docker/docker/image"
+	"encoding/json"
 )
 
 // valid filters as of docker commit 49bf474
@@ -237,13 +238,22 @@ func (i *Image) ImageHistory(imageName string) ([]*types.ImageHistory, error) {
 		return nil, fmt.Errorf("Unable to get top layer id for image %s", id)
 	}
 
-	for {
-		log.Debugf("Image data for layer %s = %#v", layerID, *layer.Image)
+	img := docker.V1Image{}
 
-		h := docker.History{
-			Created: layer.m
+	for {
+		if err := json.Unmarshal([]byte(layer.Meta), &img); err != nil {
+			return nil, fmt.Errorf("Failed to unmarshall layer history: %s", err)
 		}
 
+		log.Debugf("Image meta data for layer %s = %#v", layerID, img)
+
+		history = append([]*types.ImageHistory{{
+			ID:      "<missing>",
+			Created: img.Created.Unix(),
+			CreatedBy: strings.Join(img.ContainerConfig.Cmd, " "),
+			Comment: img.Comment,
+			Size: img.Size,
+		}}, history ...)
 
 		// Check for scratch ID
 		if layer.Image.Parent == "scratch" {
@@ -259,42 +269,7 @@ func (i *Image) ImageHistory(imageName string) ([]*types.ImageHistory, error) {
 	}
 
 
-		history = append([]*types.ImageHistory{{
-			ID:        "<missing>",
-			Created:   h.Created.Unix(),
-			CreatedBy: h.CreatedBy,
-			Comment:   h.Comment,
-			Size:      layerSize,
-		}}, history...)
-	}
-
-	// Fill in image IDs and tags
-	histImg := img
-	id := img.ID()
-	for _, h := range history {
-		h.ID = id.String()
-
-		var tags []string
-		for _, r := range daemon.referenceStore.References(id.Digest()) {
-			if _, ok := r.(reference.NamedTagged); ok {
-				tags = append(tags, r.String())
-			}
-		}
-
-		h.Tags = tags
-
-		id = histImg.Parent
-		if id == "" {
-			break
-		}
-		histImg, err = daemon.GetImage(id.String())
-		if err != nil {
-			break
-		}
-	}
-	imageActions.WithValues("history").UpdateSince(start)
 	return history, nil
-	//return nil, fmt.Errorf("%s does not yet implement image.History", ProductName())
 }
 
 func (i *Image) Images(imageFilters filters.Args, all bool, withExtraAttrs bool) ([]*types.ImageSummary, error) {
