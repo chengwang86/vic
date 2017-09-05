@@ -43,6 +43,8 @@ import (
 	"github.com/vmware/vic/pkg/trace"
 	"github.com/vmware/vic/pkg/uid"
 	"github.com/vmware/vic/pkg/vsphere/sys"
+
+	docker "github.com/docker/docker/image"
 )
 
 // valid filters as of docker commit 49bf474
@@ -211,39 +213,51 @@ func (i *Image) ImageDelete(imageRef string, force, prune bool) ([]types.ImageDe
 func (i *Image) ImageHistory(imageName string) ([]*types.ImageHistory, error) {
 	defer trace.End(trace.Begin(imageName))
 
-	start := time.Now()
-	img, err := daemon.GetImage(name)
+	image := strings.TrimSuffix(imageName, ":")
+
+	ref, err := reference.ParseNamed(image)
 	if err != nil {
 		return nil, err
 	}
 
+	// get id of image from the reference
+	id, err := cache.RepositoryCache().Get(ref)
+	if err != nil {
+		return nil, fmt.Errorf("Could not retrieve image id from repository cache using reference: %s", err)
+	}
+
 	history := []*types.ImageHistory{}
 
-	layerCounter := 0
-	rootFS := *img.RootFS
-	rootFS.DiffIDs = nil
+	// get the leaf layerID from repo cache using the image id
+	layerID := cache.RepositoryCache().GetLayerID(id)
 
-	for _, h := range img.History {
-		var layerSize int64
+	// get the layer (ImageWithMeta) from the layer cache using the layer id
+	layer, err := imagec.LayerCache().Get(layerID)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to get top layer id for image %s", id)
+	}
 
-		if !h.EmptyLayer {
-			if len(img.RootFS.DiffIDs) <= layerCounter {
-				return nil, fmt.Errorf("too many non-empty layers in History section")
-			}
+	for {
+		log.Debugf("Image data for layer %s = %#v", layerID, *layer.Image)
 
-			rootFS.Append(img.RootFS.DiffIDs[layerCounter])
-			l, err := daemon.layerStore.Get(rootFS.ChainID())
-			if err != nil {
-				return nil, err
-			}
-			layerSize, err = l.DiffSize()
-			layer.ReleaseAndLog(daemon.layerStore, l)
-			if err != nil {
-				return nil, err
-			}
-
-			layerCounter++
+		h := docker.History{
+			Created: layer.m
 		}
+
+
+		// Check for scratch ID
+		if layer.Image.Parent == "scratch" {
+			break
+		}
+
+		// set the layer to the parent layer
+		layerID = layer.Image.Parent
+		layer, err = imagec.LayerCache().Get(layerID)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to get metadata for layer %s", layerID)
+		}
+	}
+
 
 		history = append([]*types.ImageHistory{{
 			ID:        "<missing>",
